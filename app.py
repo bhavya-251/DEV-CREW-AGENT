@@ -1,12 +1,10 @@
 import os
+from typing import TypedDict
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from typing import TypedDict
-
 from langgraph.graph import StateGraph, START, END
-
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 
@@ -23,30 +21,25 @@ app = FastAPI()
 
 llm = ChatGoogleGenerativeAI(
     model="gemini-3.5-flash",
-    max_tokens=3000,
+    max_tokens=5000,
     max_retries=2
 )
 
 
 # ============================================================
-# GRAPH STATE
+# LANGGRAPH STATE
 # ============================================================
 
 class DevCrewState(TypedDict):
-
     user_request: str
-
     plan: str
-
     implementation: str
-
     review: str
-
     final_result: str
 
 
 # ============================================================
-# HELPER FUNCTION
+# RESPONSE TEXT HELPER
 # ============================================================
 
 def extract_text(response):
@@ -58,24 +51,22 @@ def extract_text(response):
 
     if isinstance(content, list):
 
-        text_parts = []
+        parts = []
 
         for item in content:
 
             if isinstance(item, dict):
 
                 if item.get("type") == "text":
-
                     text = item.get("text", "")
 
                     if text:
-                        text_parts.append(text)
+                        parts.append(text)
 
             elif isinstance(item, str):
+                parts.append(item)
 
-                text_parts.append(item)
-
-        return "\n".join(text_parts)
+        return "\n".join(parts)
 
     return str(content)
 
@@ -89,26 +80,29 @@ def planner_node(state: DevCrewState):
     request = state["user_request"]
 
     prompt = f"""
-You are the Planner in a software development team called Dev Crew.
+You are the PLANNER in a software development team called Dev Crew.
 
-The user wants to build the following:
+The user has requested:
 
 {request}
 
-Create a clear development plan.
+Analyze the requirement and create a practical development plan.
 
-Include:
+Your plan must contain:
 
-1. Understanding of the requirement
+1. What the application should do
 2. Main features
-3. Technologies that could be used
-4. Project structure
-5. Important implementation steps
-6. Possible challenges
+3. Recommended technology stack
+4. Database requirements if needed
+5. Main files/components required
+6. Important implementation steps
+7. Potential problems or edge cases
 
-Do not write the complete code yet.
+Keep the plan focused and practical.
 
-Keep the plan practical and suitable for a student software project.
+Do NOT write the actual source code.
+
+Do NOT generate a long essay.
 
 Do not use emojis or decorative symbols.
 """
@@ -127,33 +121,47 @@ Do not use emojis or decorative symbols.
 def developer_node(state: DevCrewState):
 
     request = state["user_request"]
-
     plan = state["plan"]
 
     prompt = f"""
-You are the Developer in a software development team called Dev Crew.
+You are the DEVELOPER in the Dev Crew software development team.
 
 USER REQUIREMENT:
-
 {request}
 
 PLANNER'S PLAN:
-
 {plan}
 
-Now act as the main developer.
+Now implement the requested application.
 
-Based on the requirement and plan:
+IMPORTANT:
 
-1. Explain the implementation approach.
-2. Provide the important code or pseudocode needed.
-3. Explain the main files and their purpose.
-4. Mention how the components connect.
-5. Make the solution practical and runnable.
+The goal is to produce an ACTUAL WORKING STUDENT PROJECT.
 
-Do not blindly follow the plan if you notice a better approach.
+You must:
 
-Use clear headings.
+1. Follow the planner's useful recommendations.
+2. Choose a simple and practical implementation.
+3. Provide COMPLETE code for the important files.
+4. Do not intentionally leave code unfinished.
+5. Do not write placeholders such as:
+   - "add your code here"
+   - "continue the code"
+   - "etc."
+   - "implementation omitted"
+6. Make sure the files work together.
+7. Include requirements.txt when external Python packages are needed.
+8. Include database setup when a database is required.
+9. Include HTML/templates when a web application requires them.
+10. Keep the implementation realistic for a student project.
+
+Start with a short implementation summary.
+
+Then provide the project structure.
+
+Then provide the complete code.
+
+Do not spend most of the response explaining theory.
 
 Do not use emojis or decorative symbols.
 """
@@ -172,43 +180,39 @@ Do not use emojis or decorative symbols.
 def reviewer_node(state: DevCrewState):
 
     request = state["user_request"]
-
-    plan = state["plan"]
-
     implementation = state["implementation"]
 
     prompt = f"""
-You are the Code Reviewer in a software development team called Dev Crew.
+You are the REVIEWER in the Dev Crew software development team.
 
 USER REQUIREMENT:
-
 {request}
 
-PLANNER'S PLAN:
-
-{plan}
-
 DEVELOPER'S IMPLEMENTATION:
-
 {implementation}
 
-Review the proposed solution carefully.
+Review the developer's solution.
 
-Check:
+Check specifically:
 
-1. Whether the requirement is satisfied.
-2. Technical correctness.
-3. Missing features.
-4. Possible bugs.
-5. Security or reliability concerns.
-6. Code quality.
-7. Whether the approach is practical for a student project.
+1. Does it satisfy the user's requirement?
+2. Is the code complete?
+3. Are there syntax or logical problems?
+4. Are required dependencies included?
+5. Do file names and imports match?
+6. Are database operations consistent?
+7. Are routes, functions, and templates connected correctly?
+8. Are there obvious security problems?
+9. Can a student realistically run the project?
 
-Give specific corrections and improvements.
+Give a concise review.
 
-If something is already correct, say so.
+List:
+- Problems found
+- Required corrections
+- Things that are already correct
 
-Do not rewrite the entire project.
+Do NOT rewrite the entire project.
 
 Do not use emojis or decorative symbols.
 """
@@ -227,59 +231,76 @@ Do not use emojis or decorative symbols.
 def finalizer_node(state: DevCrewState):
 
     request = state["user_request"]
-
     plan = state["plan"]
-
     implementation = state["implementation"]
-
     review = state["review"]
 
     prompt = f"""
-You are the Lead Developer of Dev Crew.
+You are the FINALIZER and LEAD DEVELOPER of Dev Crew.
 
-Create the final solution for the user's development request.
+Your job is to turn the developer's implementation into the
+FINAL, CLEAN, USABLE answer.
 
 USER REQUIREMENT:
-
 {request}
 
 PLANNER:
-
 {plan}
 
 DEVELOPER:
-
 {implementation}
 
 REVIEWER:
-
 {review}
 
-Use the reviewer's feedback to improve the developer's solution.
+IMPORTANT FINAL OUTPUT RULES:
 
-Your final response must contain:
+The final answer must prioritize a COMPLETE WORKING SOLUTION.
 
-FINAL DEVELOPMENT SOLUTION
+Use this structure:
 
-1. Requirement Understanding
+# FINAL DEVELOPMENT SOLUTION
 
-2. Recommended Technologies
+## 1. Technology Stack
 
-3. Project Structure
+Give a short list of technologies.
 
-4. Implementation
+## 2. Project Structure
 
-5. Important Code
+Show the required files and folders.
 
-6. How It Works
+## 3. Requirements
 
-7. Improvements Made After Review
+Show the complete requirements.txt if needed.
 
-8. Next Steps
+## 4. Implementation
 
-Make the response practical and easy for a student to understand.
+Provide COMPLETE code for the important files.
 
-Do not mention internal agent instructions.
+VERY IMPORTANT:
+
+- Do not stop halfway through a file.
+- Do not use placeholders.
+- Do not say "remaining code is similar".
+- Do not say "continue here".
+- Do not omit important code.
+- Make sure imports match the project structure.
+- Make sure functions and routes referenced by other files actually exist.
+- Apply the reviewer's corrections.
+- Keep the implementation practical.
+- Prefer a smaller COMPLETE project over a huge INCOMPLETE project.
+
+## 5. How to Run
+
+Give simple commands to install and run the project.
+
+## 6. How It Works
+
+Give a short explanation of the main workflow.
+
+Do NOT write a long theoretical explanation.
+
+Do NOT include internal planner/developer/reviewer discussions.
 
 Do not use emojis or decorative symbols.
 """
@@ -297,8 +318,6 @@ Do not use emojis or decorative symbols.
 
 graph_builder = StateGraph(DevCrewState)
 
-
-# Add nodes
 
 graph_builder.add_node(
     "planner",
@@ -321,7 +340,9 @@ graph_builder.add_node(
 )
 
 
-# Define graph flow
+# ============================================================
+# GRAPH FLOW
+# ============================================================
 
 graph_builder.add_edge(
     START,
@@ -349,7 +370,9 @@ graph_builder.add_edge(
 )
 
 
-# Compile graph
+# ============================================================
+# COMPILE GRAPH
+# ============================================================
 
 dev_crew = graph_builder.compile()
 
@@ -501,9 +524,7 @@ HTML = """
     ></div>
 
 
-    <div
-        id="result"
-    >
+    <div id="result">
         Your final development solution will appear here.
     </div>
 
@@ -570,17 +591,9 @@ async function generateSolution() {
             await response.json();
 
 
-        if (!response.ok) {
-
-            result.textContent =
-                data.response ||
-                "Something went wrong.";
-
-        } else {
-
-            result.textContent =
-                data.response;
-        }
+        result.textContent =
+            data.response ||
+            "No response was generated.";
 
 
     } catch (error) {
@@ -595,7 +608,6 @@ async function generateSolution() {
 
     button.disabled = false;
 }
-
 
 </script>
 
@@ -619,7 +631,7 @@ async def home():
 
 
 # ============================================================
-# GENERATE SOLUTION
+# GENERATE SOLUTION ROUTE
 # ============================================================
 
 @app.post("/generate")
@@ -669,6 +681,14 @@ async def generate(request: Request):
             "final_result",
             ""
         )
+
+
+        if not final_result:
+
+            final_result = (
+                "The development team could not "
+                "generate a final solution."
+            )
 
 
         return JSONResponse(
