@@ -42,7 +42,7 @@ class DevCrewState(TypedDict):
 
 
 # ============================================================
-# EXTRACT TEXT FROM GEMINI RESPONSE
+# EXTRACT TEXT
 # ============================================================
 
 def extract_text(response):
@@ -77,7 +77,7 @@ def extract_text(response):
 
 
 # ============================================================
-# NODE 1: PLANNER
+# PLANNER
 # ============================================================
 
 def planner_node(state: DevCrewState):
@@ -101,7 +101,7 @@ Include:
 6. Main implementation steps
 7. Important edge cases
 
-Keep this response reasonably detailed but not excessively long.
+Keep the response reasonably detailed but not excessively long.
 
 Do NOT write source code.
 
@@ -116,7 +116,7 @@ Do not use emojis or decorative symbols.
 
 
 # ============================================================
-# NODE 2: BACKEND DEVELOPER
+# BACKEND DEVELOPER
 # ============================================================
 
 def backend_node(state: DevCrewState):
@@ -167,7 +167,7 @@ Do not use emojis or decorative symbols.
 
 
 # ============================================================
-# NODE 3: FRONTEND DEVELOPER
+# FRONTEND DEVELOPER
 # ============================================================
 
 def frontend_node(state: DevCrewState):
@@ -217,7 +217,7 @@ Do not use emojis or decorative symbols.
 
 
 # ============================================================
-# NODE 4: REVIEWER
+# REVIEWER
 # ============================================================
 
 def reviewer_node(state: DevCrewState):
@@ -278,7 +278,7 @@ Do not use emojis or decorative symbols.
 
 
 # ============================================================
-# NODE 5: FINALIZER
+# FINALIZER
 # ============================================================
 
 def finalizer_node(state: DevCrewState):
@@ -343,7 +343,6 @@ Do not use emojis or decorative symbols.
 # ============================================================
 
 builder = StateGraph(DevCrewState)
-
 
 builder.add_node(
     "planner",
@@ -412,13 +411,6 @@ builder.add_edge(
 
 checkpointer = InMemorySaver()
 
-
-# ============================================================
-# COMPILE GRAPH
-#
-# The graph pauses AFTER each stage.
-# Continue resumes the SAME thread.
-# ============================================================
 
 graph = builder.compile(
     checkpointer=checkpointer,
@@ -531,10 +523,30 @@ HTML = """
             border: 1px solid #ddd;
             border-radius: 12px;
             background: #fafafa;
-            white-space: pre-wrap;
-            word-wrap: break-word;
             line-height: 1.6;
             min-height: 100px;
+        }
+
+        .response-section {
+            padding-bottom: 25px;
+            margin-bottom: 25px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .response-section:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+        }
+
+        .response-title {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 12px;
+        }
+
+        .response-content {
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
 
         #continueButton {
@@ -592,14 +604,50 @@ HTML = """
 let sessionId = null;
 
 
-function showResult(data) {
+function addResponse(data) {
 
-    document.getElementById("stage").textContent =
+    const output =
+        document.getElementById("output");
+
+
+    const section =
+        document.createElement("div");
+
+    section.className =
+        "response-section";
+
+
+    const title =
+        document.createElement("div");
+
+    title.className =
+        "response-title";
+
+    title.textContent =
         data.stage;
 
 
-    document.getElementById("output").textContent =
+    const content =
+        document.createElement("div");
+
+    content.className =
+        "response-content";
+
+    content.textContent =
         data.response;
+
+
+    section.appendChild(title);
+
+    section.appendChild(content);
+
+    output.appendChild(section);
+
+
+    window.scrollTo({
+        top: document.body.scrollHeight,
+        behavior: "smooth"
+    });
 
 
     const button =
@@ -610,7 +658,9 @@ function showResult(data) {
 
         button.style.display = "none";
 
-        document.getElementById("startButton").disabled = false;
+        document.getElementById(
+            "startButton"
+        ).disabled = false;
 
     } else {
 
@@ -625,74 +675,100 @@ function showResult(data) {
 async function startProject() {
 
     const request =
-        document.getElementById("request").value.trim();
+        document.getElementById(
+            "request"
+        ).value.trim();
 
 
     if (!request) {
 
-        document.getElementById("output").textContent =
+        document.getElementById(
+            "output"
+        ).textContent =
             "Please enter a development requirement.";
 
         return;
     }
 
 
-    document.getElementById("startButton").disabled = true;
+    document.getElementById(
+        "startButton"
+    ).disabled = true;
 
-    document.getElementById("continueButton").style.display =
-        "none";
 
-    document.getElementById("stage").textContent =
+    document.getElementById(
+        "continueButton"
+    ).style.display = "none";
+
+
+    document.getElementById(
+        "stage"
+    ).textContent =
         "Planner is working...";
 
-    document.getElementById("output").textContent = "";
+
+    document.getElementById(
+        "output"
+    ).innerHTML = "";
 
 
     try {
 
-        const response = await fetch(
-            "/start",
-            {
-                method: "POST",
+        const response =
+            await fetch(
+                "/start",
+                {
+                    method: "POST",
 
-                headers: {
-                    "Content-Type": "application/json"
-                },
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
 
-                body: JSON.stringify({
-                    request: request
-                })
-            }
-        );
+                    body: JSON.stringify({
+                        request: request
+                    })
+                }
+            );
 
 
-        const data = await response.json();
+        const data =
+            await response.json();
 
 
         if (!response.ok) {
 
-            document.getElementById("output").textContent =
-                data.response || "Something went wrong.";
+            document.getElementById(
+                "output"
+            ).textContent =
+                data.response ||
+                "Something went wrong.";
 
-            document.getElementById("startButton").disabled =
-                false;
+            document.getElementById(
+                "startButton"
+            ).disabled = false;
 
             return;
         }
 
 
-        sessionId = data.session_id;
+        sessionId =
+            data.session_id;
 
-        showResult(data);
+
+        addResponse(data);
 
 
     } catch (error) {
 
-        document.getElementById("output").textContent =
+        document.getElementById(
+            "output"
+        ).textContent =
             "Unable to connect to the server.";
 
-        document.getElementById("startButton").disabled =
-            false;
+        document.getElementById(
+            "startButton"
+        ).disabled = false;
     }
 
 }
@@ -701,40 +777,52 @@ async function startProject() {
 async function continueProject() {
 
     const button =
-        document.getElementById("continueButton");
+        document.getElementById(
+            "continueButton"
+        );
 
 
     button.disabled = true;
 
-    document.getElementById("stage").textContent =
+
+    document.getElementById(
+        "stage"
+    ).textContent =
         "Dev Crew is working...";
 
 
     try {
 
-        const response = await fetch(
-            "/continue",
-            {
-                method: "POST",
+        const response =
+            await fetch(
+                "/continue",
+                {
+                    method: "POST",
 
-                headers: {
-                    "Content-Type": "application/json"
-                },
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
 
-                body: JSON.stringify({
-                    session_id: sessionId
-                })
-            }
-        );
+                    body: JSON.stringify({
+                        session_id:
+                            sessionId
+                    })
+                }
+            );
 
 
-        const data = await response.json();
+        const data =
+            await response.json();
 
 
         if (!response.ok) {
 
-            document.getElementById("output").textContent =
-                data.response || "Something went wrong.";
+            document.getElementById(
+                "output"
+            ).textContent =
+                data.response ||
+                "Something went wrong.";
 
             button.disabled = false;
 
@@ -742,12 +830,14 @@ async function continueProject() {
         }
 
 
-        showResult(data);
+        addResponse(data);
 
 
     } catch (error) {
 
-        document.getElementById("output").textContent =
+        document.getElementById(
+            "output"
+        ).textContent =
             "Unable to connect to the server.";
 
         button.disabled = false;
@@ -816,17 +906,23 @@ async def start_project(request: Request):
 
         initial_state = {
 
-            "user_request": user_request,
+            "user_request":
+                user_request,
 
-            "plan": "",
+            "plan":
+                "",
 
-            "backend": "",
+            "backend":
+                "",
 
-            "frontend": "",
+            "frontend":
+                "",
 
-            "review": "",
+            "review":
+                "",
 
-            "final_result": ""
+            "final_result":
+                ""
         }
 
 
@@ -841,17 +937,27 @@ async def start_project(request: Request):
 
         return JSONResponse(
             {
-                "session_id": thread_id,
-                "stage": "Planner",
-                "response": result["plan"],
-                "finished": False
+                "session_id":
+                    thread_id,
+
+                "stage":
+                    "Planner",
+
+                "response":
+                    result["plan"],
+
+                "finished":
+                    False
             }
         )
 
 
     except Exception as e:
 
-        print("ERROR:", str(e))
+        print(
+            "ERROR:",
+            str(e)
+        )
 
         return JSONResponse(
             {
@@ -878,7 +984,10 @@ async def continue_project(request: Request):
         )
 
 
-        if not thread_id or thread_id not in sessions:
+        if (
+            not thread_id
+            or thread_id not in sessions
+        ):
 
             return JSONResponse(
                 {
@@ -891,7 +1000,8 @@ async def continue_project(request: Request):
 
         config = {
             "configurable": {
-                "thread_id": thread_id
+                "thread_id":
+                    thread_id
             }
         }
 
@@ -905,63 +1015,98 @@ async def continue_project(request: Request):
         state = result
 
 
-        if state.get("final_result"):
+        if state.get(
+            "final_result"
+        ):
 
             return JSONResponse(
                 {
-                    "stage": "Finalizer",
-                    "response": state["final_result"],
-                    "finished": True
+                    "stage":
+                        "Finalizer",
+
+                    "response":
+                        state["final_result"],
+
+                    "finished":
+                        True
                 }
             )
 
 
-        if state.get("review"):
+        if state.get(
+            "review"
+        ):
 
             return JSONResponse(
                 {
-                    "stage": "Reviewer",
-                    "response": state["review"],
-                    "finished": False
+                    "stage":
+                        "Reviewer",
+
+                    "response":
+                        state["review"],
+
+                    "finished":
+                        False
                 }
             )
 
 
-        if state.get("frontend"):
+        if state.get(
+            "frontend"
+        ):
 
             return JSONResponse(
                 {
-                    "stage": "Developer - Frontend",
-                    "response": state["frontend"],
-                    "finished": False
+                    "stage":
+                        "Developer - Frontend",
+
+                    "response":
+                        state["frontend"],
+
+                    "finished":
+                        False
                 }
             )
 
 
-        if state.get("backend"):
+        if state.get(
+            "backend"
+        ):
 
             return JSONResponse(
                 {
-                    "stage": "Developer - Backend",
-                    "response": state["backend"],
-                    "finished": False
+                    "stage":
+                        "Developer - Backend",
+
+                    "response":
+                        state["backend"],
+
+                    "finished":
+                        False
                 }
             )
 
 
         return JSONResponse(
             {
-                "stage": "Processing",
+                "stage":
+                    "Processing",
+
                 "response":
-                "Dev Crew is processing the project.",
-                "finished": False
+                    "Dev Crew is processing the project.",
+
+                "finished":
+                    False
             }
         )
 
 
     except Exception as e:
 
-        print("ERROR:", str(e))
+        print(
+            "ERROR:",
+            str(e)
+        )
 
         return JSONResponse(
             {
