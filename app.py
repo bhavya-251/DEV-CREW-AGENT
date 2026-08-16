@@ -43,7 +43,7 @@ class TravelState(TypedDict):
 
 
 # ============================================================
-# USER REQUEST
+# USER INPUT
 # ============================================================
 
 class TravelRequest(BaseModel):
@@ -53,6 +53,44 @@ class TravelRequest(BaseModel):
     people: str
     interests: str
     hotel_preference: str
+
+
+# ============================================================
+# HELPER - EXTRACT GEMINI TEXT
+# ============================================================
+
+def extract_text(response):
+    """
+    Gemini/LangChain can sometimes return response.content
+    as a list containing dictionaries instead of a plain string.
+
+    This function extracts only the actual text.
+    """
+
+    content = response.content
+
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+
+        text_parts = []
+
+        for item in content:
+
+            if isinstance(item, str):
+                text_parts.append(item)
+
+            elif isinstance(item, dict):
+
+                if item.get("type") == "text":
+                    text_parts.append(
+                        item.get("text", "")
+                    )
+
+        return "\n".join(text_parts)
+
+    return str(content)
 
 
 # ============================================================
@@ -89,7 +127,7 @@ Do not claim that hotel prices or availability are live.
     response = llm.invoke(prompt)
 
     return {
-        "plan": response.content
+        "plan": extract_text(response)
     }
 
 
@@ -127,7 +165,7 @@ Do not claim that prices or availability are live.
     response = llm.invoke(prompt)
 
     return {
-        "activities": response.content
+        "activities": extract_text(response)
     }
 
 
@@ -170,7 +208,7 @@ current prices and availability.
     response = llm.invoke(prompt)
 
     return {
-        "hotels": response.content
+        "hotels": extract_text(response)
     }
 
 
@@ -226,7 +264,7 @@ verify current prices.
     response = llm.invoke(prompt)
 
     return {
-        "budget_check": response.content
+        "budget_check": extract_text(response)
     }
 
 
@@ -274,7 +312,7 @@ Do not create the final itinerary yet.
     response = llm.invoke(prompt)
 
     return {
-        "review": response.content
+        "review": extract_text(response)
     }
 
 
@@ -354,22 +392,21 @@ prices and availability before booking.
 
 Make the final answer practical, organized and easy to follow.
 
-Return ONLY the travel plan as normal text.
+Return ONLY the travel plan.
 Do not return JSON.
 Do not return Python code.
 Do not return dictionaries.
 """
 
-
     response = llm.invoke(prompt)
 
     return {
-        "final_plan": response.content
+        "final_plan": extract_text(response)
     }
 
 
 # ============================================================
-# LANGGRAPH
+# LANGGRAPH WORKFLOW
 # ============================================================
 
 builder = StateGraph(TravelState)
@@ -487,13 +524,43 @@ button:disabled {
 }
 
 #result {
-    white-space: pre-wrap;
-    line-height: 1.6;
+    line-height: 1.7;
     background: #fafafa;
-    padding: 20px;
+    padding: 25px;
     border-radius: 10px;
     border: 1px solid #ddd;
     margin-top: 20px;
+}
+
+#result h1 {
+    text-align: left;
+    margin-top: 25px;
+}
+
+#result h2 {
+    margin-top: 25px;
+    margin-bottom: 10px;
+}
+
+#result h3 {
+    margin-top: 20px;
+}
+
+#result p {
+    margin: 10px 0;
+}
+
+#result ul {
+    padding-left: 25px;
+}
+
+#result li {
+    margin-bottom: 7px;
+}
+
+#result a {
+    color: #2563eb;
+    text-decoration: underline;
 }
 
 </style>
@@ -596,6 +663,94 @@ Creating your travel plan...
 
 <script>
 
+
+function escapeHTML(text) {
+
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+
+}
+
+
+function formatTravelPlan(text) {
+
+    let html = escapeHTML(text);
+
+
+    // Convert URLs into clickable links
+
+    html = html.replace(
+        /(https?:\\/\\/[^\\s<]+)/g,
+        '<a href="$1" target="_blank">$1</a>'
+    );
+
+
+    // Bold text
+
+    html = html.replace(
+        /\\*\\*(.*?)\\*\\*/g,
+        "<strong>$1</strong>"
+    );
+
+
+    // Headings
+
+    html = html.replace(
+        /^### (.*)$/gm,
+        "<h3>$1</h3>"
+    );
+
+
+    html = html.replace(
+        /^## (.*)$/gm,
+        "<h2>$1</h2>"
+    );
+
+
+    html = html.replace(
+        /^# (.*)$/gm,
+        "<h1>$1</h1>"
+    );
+
+
+    // Bullet points
+
+    html = html.replace(
+        /^[-•] (.*)$/gm,
+        "<li>$1</li>"
+    );
+
+
+    // Numbered headings
+
+    html = html.replace(
+        /^(\\d+)\\. (TRIP OVERVIEW|DAY-BY-DAY ITINERARY|ACCOMMODATION SUGGESTIONS|BUDGET GUIDANCE|TRAVEL TIPS|BOOKING WEBSITES)$/gm,
+        "<h2>$1. $2</h2>"
+    );
+
+
+    // Convert remaining line breaks
+
+    html = html.replace(
+        /\\n\\n/g,
+        "<br><br>"
+    );
+
+    html = html.replace(
+        /\\n/g,
+        "<br>"
+    );
+
+
+    return html;
+
+}
+
+
 async function planTrip() {
 
     const button =
@@ -638,6 +793,7 @@ async function planTrip() {
         alert("Please fill in all fields.");
 
         return;
+
     }
 
 
@@ -690,23 +846,10 @@ async function planTrip() {
         }
 
 
-        if (
-            typeof data.final_plan === "string"
-        ) {
-
-            result.textContent =
-                data.final_plan;
-
-        } else {
-
-            result.textContent =
-                JSON.stringify(
-                    data.final_plan,
-                    null,
-                    2
-                );
-
-        }
+        result.innerHTML =
+            formatTravelPlan(
+                data.final_plan
+            );
 
 
     } catch (error) {
@@ -724,6 +867,7 @@ async function planTrip() {
 
 }
 
+
 </script>
 
 </body>
@@ -733,7 +877,7 @@ async function planTrip() {
 
 
 # ============================================================
-# HOME
+# HOME ROUTE
 # ============================================================
 
 @app.get("/", response_class=HTMLResponse)
@@ -743,7 +887,7 @@ async def home():
 
 
 # ============================================================
-# PLAN TRIP
+# PLAN ROUTE
 # ============================================================
 
 @app.post("/plan")
@@ -767,7 +911,9 @@ async def plan_trip(request: TravelRequest):
         }
 
 
-        result = graph.invoke(initial_state)
+        result = graph.invoke(
+            initial_state
+        )
 
 
         final_plan = result.get(
@@ -781,8 +927,12 @@ async def plan_trip(request: TravelRequest):
             str
         ):
 
-            final_plan = str(
-                final_plan
+            final_plan = extract_text(
+                type(
+                    "Response",
+                    (),
+                    {"content": final_plan}
+                )()
             )
 
 
@@ -812,10 +962,7 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(
-        os.getenv(
-            "PORT",
-            "8000"
-        )
+        os.getenv("PORT", "8000")
     )
 
     uvicorn.run(
