@@ -17,7 +17,7 @@ app = FastAPI()
 # ============================================================
 
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
+    model="gemini-3-flash-preview",
     google_api_key=os.getenv("GOOGLE_API_KEY"),
     temperature=0.7,
     max_output_tokens=5000
