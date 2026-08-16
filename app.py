@@ -1,27 +1,29 @@
-import os
+import uuid
 from typing import TypedDict
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import InMemorySaver
+
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 
 # ============================================================
-# FASTAPI APPLICATION
+# FASTAPI
 # ============================================================
 
 app = FastAPI()
 
 
 # ============================================================
-# GOOGLE GEMINI MODEL
+# GOOGLE GEMINI
 # ============================================================
 
 llm = ChatGoogleGenerativeAI(
     model="gemini-3.5-flash",
-    max_tokens=5000,
+    max_tokens=3500,
     max_retries=2
 )
 
@@ -33,13 +35,14 @@ llm = ChatGoogleGenerativeAI(
 class DevCrewState(TypedDict):
     user_request: str
     plan: str
-    implementation: str
+    backend: str
+    frontend: str
     review: str
     final_result: str
 
 
 # ============================================================
-# RESPONSE TEXT HELPER
+# EXTRACT TEXT FROM GEMINI RESPONSE
 # ============================================================
 
 def extract_text(response):
@@ -58,12 +61,14 @@ def extract_text(response):
             if isinstance(item, dict):
 
                 if item.get("type") == "text":
+
                     text = item.get("text", "")
 
                     if text:
                         parts.append(text)
 
             elif isinstance(item, str):
+
                 parts.append(item)
 
         return "\n".join(parts)
@@ -77,32 +82,28 @@ def extract_text(response):
 
 def planner_node(state: DevCrewState):
 
-    request = state["user_request"]
-
     prompt = f"""
 You are the PLANNER in a software development team called Dev Crew.
 
-The user has requested:
+USER REQUIREMENT:
 
-{request}
+{state["user_request"]}
 
-Analyze the requirement and create a practical development plan.
+Analyze the requirement and create a practical project plan.
 
-Your plan must contain:
+Include:
 
-1. What the application should do
+1. Requirement understanding
 2. Main features
-3. Recommended technology stack
+3. Recommended technologies
 4. Database requirements if needed
-5. Main files/components required
-6. Important implementation steps
-7. Potential problems or edge cases
+5. Project structure
+6. Main implementation steps
+7. Important edge cases
 
-Keep the plan focused and practical.
+Keep this response reasonably detailed but not excessively long.
 
-Do NOT write the actual source code.
-
-Do NOT generate a long essay.
+Do NOT write source code.
 
 Do not use emojis or decorative symbols.
 """
@@ -115,53 +116,45 @@ Do not use emojis or decorative symbols.
 
 
 # ============================================================
-# NODE 2: DEVELOPER
+# NODE 2: BACKEND DEVELOPER
 # ============================================================
 
-def developer_node(state: DevCrewState):
-
-    request = state["user_request"]
-    plan = state["plan"]
+def backend_node(state: DevCrewState):
 
     prompt = f"""
-You are the DEVELOPER in the Dev Crew software development team.
+You are the BACKEND DEVELOPER in the Dev Crew software
+development team.
 
 USER REQUIREMENT:
-{request}
 
-PLANNER'S PLAN:
-{plan}
+{state["user_request"]}
 
-Now implement the requested application.
+PROJECT PLAN:
+
+{state["plan"]}
+
+Now develop the backend portion of the requested project.
 
 IMPORTANT:
 
-The goal is to produce an ACTUAL WORKING STUDENT PROJECT.
+- Provide complete backend implementation.
+- Do not leave code unfinished.
+- Do not use placeholders.
+- Do not say "continue the code".
+- Do not say "implementation omitted".
+- Include important backend files.
+- Include database models and logic when required.
+- Make sure imports are correct.
+- Make sure the code works with the planned project structure.
+- Keep it practical for a student project.
 
-You must:
+Your response should contain:
 
-1. Follow the planner's useful recommendations.
-2. Choose a simple and practical implementation.
-3. Provide COMPLETE code for the important files.
-4. Do not intentionally leave code unfinished.
-5. Do not write placeholders such as:
-   - "add your code here"
-   - "continue the code"
-   - "etc."
-   - "implementation omitted"
-6. Make sure the files work together.
-7. Include requirements.txt when external Python packages are needed.
-8. Include database setup when a database is required.
-9. Include HTML/templates when a web application requires them.
-10. Keep the implementation realistic for a student project.
+1. Backend purpose
+2. Backend files
+3. Complete code for the backend files
 
-Start with a short implementation summary.
-
-Then provide the project structure.
-
-Then provide the complete code.
-
-Do not spend most of the response explaining theory.
+Do NOT generate the frontend.
 
 Do not use emojis or decorative symbols.
 """
@@ -169,48 +162,108 @@ Do not use emojis or decorative symbols.
     response = llm.invoke(prompt)
 
     return {
-        "implementation": extract_text(response)
+        "backend": extract_text(response)
     }
 
 
 # ============================================================
-# NODE 3: REVIEWER
+# NODE 3: FRONTEND DEVELOPER
+# ============================================================
+
+def frontend_node(state: DevCrewState):
+
+    prompt = f"""
+You are the FRONTEND DEVELOPER in the Dev Crew software
+development team.
+
+USER REQUIREMENT:
+
+{state["user_request"]}
+
+PROJECT PLAN:
+
+{state["plan"]}
+
+BACKEND IMPLEMENTATION:
+
+{state["backend"]}
+
+Now develop the frontend portion of the project.
+
+IMPORTANT:
+
+- Provide complete frontend implementation.
+- Do not leave code unfinished.
+- Do not use placeholders.
+- Make the frontend compatible with the backend.
+- Make sure routes and filenames match.
+- Include HTML, CSS, and JavaScript when required.
+- Do not rewrite the entire backend.
+
+Your response should contain:
+
+1. Frontend purpose
+2. Frontend files
+3. Complete frontend code
+
+Do not use emojis or decorative symbols.
+"""
+
+    response = llm.invoke(prompt)
+
+    return {
+        "frontend": extract_text(response)
+    }
+
+
+# ============================================================
+# NODE 4: REVIEWER
 # ============================================================
 
 def reviewer_node(state: DevCrewState):
-
-    request = state["user_request"]
-    implementation = state["implementation"]
 
     prompt = f"""
 You are the REVIEWER in the Dev Crew software development team.
 
 USER REQUIREMENT:
-{request}
 
-DEVELOPER'S IMPLEMENTATION:
-{implementation}
+{state["user_request"]}
 
-Review the developer's solution.
+PROJECT PLAN:
 
-Check specifically:
+{state["plan"]}
 
-1. Does it satisfy the user's requirement?
-2. Is the code complete?
-3. Are there syntax or logical problems?
-4. Are required dependencies included?
-5. Do file names and imports match?
-6. Are database operations consistent?
-7. Are routes, functions, and templates connected correctly?
-8. Are there obvious security problems?
-9. Can a student realistically run the project?
+BACKEND:
 
-Give a concise review.
+{state["backend"]}
 
-List:
-- Problems found
-- Required corrections
-- Things that are already correct
+FRONTEND:
+
+{state["frontend"]}
+
+Review the proposed project carefully.
+
+Check:
+
+1. Requirement satisfaction
+2. Backend correctness
+3. Frontend correctness
+4. Database consistency
+5. Imports
+6. Routes
+7. File names
+8. Dependencies
+9. Obvious syntax problems
+10. Obvious logical problems
+11. Whether the project can realistically run
+
+Give a concise review using these headings:
+
+PROBLEMS FOUND
+
+CORRECTIONS REQUIRED
+
+WHAT IS ALREADY CORRECT
 
 Do NOT rewrite the entire project.
 
@@ -225,82 +278,55 @@ Do not use emojis or decorative symbols.
 
 
 # ============================================================
-# NODE 4: FINALIZER
+# NODE 5: FINALIZER
 # ============================================================
 
 def finalizer_node(state: DevCrewState):
 
-    request = state["user_request"]
-    plan = state["plan"]
-    implementation = state["implementation"]
-    review = state["review"]
-
     prompt = f"""
 You are the FINALIZER and LEAD DEVELOPER of Dev Crew.
 
-Your job is to turn the developer's implementation into the
-FINAL, CLEAN, USABLE answer.
-
 USER REQUIREMENT:
-{request}
 
-PLANNER:
-{plan}
+{state["user_request"]}
 
-DEVELOPER:
-{implementation}
+PROJECT PLAN:
 
-REVIEWER:
-{review}
+{state["plan"]}
 
-IMPORTANT FINAL OUTPUT RULES:
+BACKEND:
 
-The final answer must prioritize a COMPLETE WORKING SOLUTION.
+{state["backend"]}
 
-Use this structure:
+FRONTEND:
 
-# FINAL DEVELOPMENT SOLUTION
+{state["frontend"]}
 
-## 1. Technology Stack
+REVIEW:
 
-Give a short list of technologies.
+{state["review"]}
 
-## 2. Project Structure
+Create the final project summary using the developer work
+and the review.
 
-Show the required files and folders.
+IMPORTANT:
 
-## 3. Requirements
+Do NOT regenerate the entire project code.
 
-Show the complete requirements.txt if needed.
+The backend and frontend code were already shown in the
+previous stages.
 
-## 4. Implementation
+Instead provide:
 
-Provide COMPLETE code for the important files.
+1. Final project structure
+2. Technologies used
+3. Corrections made after review
+4. How the components work together
+5. Installation steps
+6. How to run the project
+7. Important final notes
 
-VERY IMPORTANT:
-
-- Do not stop halfway through a file.
-- Do not use placeholders.
-- Do not say "remaining code is similar".
-- Do not say "continue here".
-- Do not omit important code.
-- Make sure imports match the project structure.
-- Make sure functions and routes referenced by other files actually exist.
-- Apply the reviewer's corrections.
-- Keep the implementation practical.
-- Prefer a smaller COMPLETE project over a huge INCOMPLETE project.
-
-## 5. How to Run
-
-Give simple commands to install and run the project.
-
-## 6. How It Works
-
-Give a short explanation of the main workflow.
-
-Do NOT write a long theoretical explanation.
-
-Do NOT include internal planner/developer/reviewer discussions.
+Keep this response reasonably concise.
 
 Do not use emojis or decorative symbols.
 """
@@ -316,25 +342,30 @@ Do not use emojis or decorative symbols.
 # BUILD LANGGRAPH
 # ============================================================
 
-graph_builder = StateGraph(DevCrewState)
+builder = StateGraph(DevCrewState)
 
 
-graph_builder.add_node(
+builder.add_node(
     "planner",
     planner_node
 )
 
-graph_builder.add_node(
-    "developer",
-    developer_node
+builder.add_node(
+    "backend",
+    backend_node
 )
 
-graph_builder.add_node(
+builder.add_node(
+    "frontend",
+    frontend_node
+)
+
+builder.add_node(
     "reviewer",
     reviewer_node
 )
 
-graph_builder.add_node(
+builder.add_node(
     "finalizer",
     finalizer_node
 )
@@ -344,37 +375,67 @@ graph_builder.add_node(
 # GRAPH FLOW
 # ============================================================
 
-graph_builder.add_edge(
+builder.add_edge(
     START,
     "planner"
 )
 
-graph_builder.add_edge(
+builder.add_edge(
     "planner",
-    "developer"
+    "backend"
 )
 
-graph_builder.add_edge(
-    "developer",
+builder.add_edge(
+    "backend",
+    "frontend"
+)
+
+builder.add_edge(
+    "frontend",
     "reviewer"
 )
 
-graph_builder.add_edge(
+builder.add_edge(
     "reviewer",
     "finalizer"
 )
 
-graph_builder.add_edge(
+builder.add_edge(
     "finalizer",
     END
 )
 
 
 # ============================================================
-# COMPILE GRAPH
+# CHECKPOINTER
 # ============================================================
 
-dev_crew = graph_builder.compile()
+checkpointer = InMemorySaver()
+
+
+# ============================================================
+# COMPILE GRAPH
+#
+# The graph pauses AFTER each stage.
+# Continue resumes the SAME thread.
+# ============================================================
+
+graph = builder.compile(
+    checkpointer=checkpointer,
+    interrupt_after=[
+        "planner",
+        "backend",
+        "frontend",
+        "reviewer"
+    ]
+)
+
+
+# ============================================================
+# SESSION STORAGE
+# ============================================================
+
+sessions = {}
 
 
 # ============================================================
@@ -425,13 +486,6 @@ HTML = """
             margin-bottom: 25px;
         }
 
-        .description {
-            text-align: center;
-            color: #555;
-            margin-bottom: 20px;
-            line-height: 1.5;
-        }
-
         textarea {
             width: 100%;
             min-height: 140px;
@@ -464,22 +518,27 @@ HTML = """
             cursor: not-allowed;
         }
 
-        #result {
+        #stage {
+            text-align: center;
+            font-weight: bold;
             margin-top: 20px;
+            color: #333;
+        }
+
+        #output {
+            margin-top: 15px;
+            padding: 20px;
             border: 1px solid #ddd;
             border-radius: 12px;
-            padding: 20px;
             background: #fafafa;
-            line-height: 1.6;
             white-space: pre-wrap;
             word-wrap: break-word;
+            line-height: 1.6;
             min-height: 100px;
         }
 
-        .status {
-            text-align: center;
-            color: #666;
-            margin: 10px;
+        #continueButton {
+            display: none;
         }
 
     </style>
@@ -497,12 +556,6 @@ HTML = """
         LangGraph Powered Development Team
     </div>
 
-    <div class="description">
-        Enter a software development requirement.
-        Dev Crew will plan the solution, develop it,
-        review it, and produce a final solution.
-    </div>
-
 
     <textarea
         id="request"
@@ -511,68 +564,94 @@ HTML = """
 
 
     <button
-        id="generateButton"
-        onclick="generateSolution()"
+        id="startButton"
+        onclick="startProject()"
     >
-        Generate Solution
+        Start Project
     </button>
 
 
-    <div
-        id="status"
-        class="status"
-    ></div>
+    <div id="stage"></div>
 
 
-    <div id="result">
-        Your final development solution will appear here.
-    </div>
+    <div id="output"></div>
+
+
+    <button
+        id="continueButton"
+        onclick="continueProject()"
+    >
+        Continue
+    </button>
 
 </div>
 
 
 <script>
 
-async function generateSolution() {
+let sessionId = null;
 
-    const requestBox =
-        document.getElementById("request");
+
+function showResult(data) {
+
+    document.getElementById("stage").textContent =
+        data.stage;
+
+
+    document.getElementById("output").textContent =
+        data.response;
+
 
     const button =
-        document.getElementById("generateButton");
+        document.getElementById("continueButton");
 
-    const status =
-        document.getElementById("status");
 
-    const result =
-        document.getElementById("result");
+    if (data.finished) {
 
+        button.style.display = "none";
+
+        document.getElementById("startButton").disabled = false;
+
+    } else {
+
+        button.style.display = "block";
+
+        button.disabled = false;
+    }
+
+}
+
+
+async function startProject() {
 
     const request =
-        requestBox.value.trim();
+        document.getElementById("request").value.trim();
 
 
     if (!request) {
 
-        result.textContent =
+        document.getElementById("output").textContent =
             "Please enter a development requirement.";
 
         return;
     }
 
 
-    button.disabled = true;
+    document.getElementById("startButton").disabled = true;
 
-    status.textContent =
-        "Dev Crew is working on your requirement...";
+    document.getElementById("continueButton").style.display =
+        "none";
 
-    result.textContent = "";
+    document.getElementById("stage").textContent =
+        "Planner is working...";
+
+    document.getElementById("output").textContent = "";
 
 
     try {
 
         const response = await fetch(
-            "/generate",
+            "/start",
             {
                 method: "POST",
 
@@ -587,26 +666,93 @@ async function generateSolution() {
         );
 
 
-        const data =
-            await response.json();
+        const data = await response.json();
 
 
-        result.textContent =
-            data.response ||
-            "No response was generated.";
+        if (!response.ok) {
+
+            document.getElementById("output").textContent =
+                data.response || "Something went wrong.";
+
+            document.getElementById("startButton").disabled =
+                false;
+
+            return;
+        }
+
+
+        sessionId = data.session_id;
+
+        showResult(data);
 
 
     } catch (error) {
 
-        result.textContent =
-            "Unable to connect to the server. Please try again.";
+        document.getElementById("output").textContent =
+            "Unable to connect to the server.";
 
+        document.getElementById("startButton").disabled =
+            false;
     }
 
+}
 
-    status.textContent = "";
 
-    button.disabled = false;
+async function continueProject() {
+
+    const button =
+        document.getElementById("continueButton");
+
+
+    button.disabled = true;
+
+    document.getElementById("stage").textContent =
+        "Dev Crew is working...";
+
+
+    try {
+
+        const response = await fetch(
+            "/continue",
+            {
+                method: "POST",
+
+                headers: {
+                    "Content-Type": "application/json"
+                },
+
+                body: JSON.stringify({
+                    session_id: sessionId
+                })
+            }
+        );
+
+
+        const data = await response.json();
+
+
+        if (!response.ok) {
+
+            document.getElementById("output").textContent =
+                data.response || "Something went wrong.";
+
+            button.disabled = false;
+
+            return;
+        }
+
+
+        showResult(data);
+
+
+    } catch (error) {
+
+        document.getElementById("output").textContent =
+            "Unable to connect to the server.";
+
+        button.disabled = false;
+    }
+
 }
 
 </script>
@@ -631,11 +777,11 @@ async def home():
 
 
 # ============================================================
-# GENERATE SOLUTION ROUTE
+# START PROJECT
 # ============================================================
 
-@app.post("/generate")
-async def generate(request: Request):
+@app.post("/start")
+async def start_project(request: Request):
 
     try:
 
@@ -658,13 +804,25 @@ async def generate(request: Request):
             )
 
 
+        thread_id = str(uuid.uuid4())
+
+
+        config = {
+            "configurable": {
+                "thread_id": thread_id
+            }
+        }
+
+
         initial_state = {
 
             "user_request": user_request,
 
             "plan": "",
 
-            "implementation": "",
+            "backend": "",
+
+            "frontend": "",
 
             "review": "",
 
@@ -672,28 +830,21 @@ async def generate(request: Request):
         }
 
 
-        result = dev_crew.invoke(
-            initial_state
+        result = graph.invoke(
+            initial_state,
+            config=config
         )
 
 
-        final_result = result.get(
-            "final_result",
-            ""
-        )
-
-
-        if not final_result:
-
-            final_result = (
-                "The development team could not "
-                "generate a final solution."
-            )
+        sessions[thread_id] = True
 
 
         return JSONResponse(
             {
-                "response": final_result
+                "session_id": thread_id,
+                "stage": "Planner",
+                "response": result["plan"],
+                "finished": False
             }
         )
 
@@ -705,7 +856,117 @@ async def generate(request: Request):
         return JSONResponse(
             {
                 "response":
-                "Something went wrong while processing the request."
+                "Something went wrong while starting the project."
+            },
+            status_code=500
+        )
+
+
+# ============================================================
+# CONTINUE PROJECT
+# ============================================================
+
+@app.post("/continue")
+async def continue_project(request: Request):
+
+    try:
+
+        data = await request.json()
+
+        thread_id = data.get(
+            "session_id"
+        )
+
+
+        if not thread_id or thread_id not in sessions:
+
+            return JSONResponse(
+                {
+                    "response":
+                    "Project session not found. Please start again."
+                },
+                status_code=400
+            )
+
+
+        config = {
+            "configurable": {
+                "thread_id": thread_id
+            }
+        }
+
+
+        result = graph.invoke(
+            None,
+            config=config
+        )
+
+
+        state = result
+
+
+        if state.get("final_result"):
+
+            return JSONResponse(
+                {
+                    "stage": "Finalizer",
+                    "response": state["final_result"],
+                    "finished": True
+                }
+            )
+
+
+        if state.get("review"):
+
+            return JSONResponse(
+                {
+                    "stage": "Reviewer",
+                    "response": state["review"],
+                    "finished": False
+                }
+            )
+
+
+        if state.get("frontend"):
+
+            return JSONResponse(
+                {
+                    "stage": "Developer - Frontend",
+                    "response": state["frontend"],
+                    "finished": False
+                }
+            )
+
+
+        if state.get("backend"):
+
+            return JSONResponse(
+                {
+                    "stage": "Developer - Backend",
+                    "response": state["backend"],
+                    "finished": False
+                }
+            )
+
+
+        return JSONResponse(
+            {
+                "stage": "Processing",
+                "response":
+                "Dev Crew is processing the project.",
+                "finished": False
+            }
+        )
+
+
+    except Exception as e:
+
+        print("ERROR:", str(e))
+
+        return JSONResponse(
+            {
+                "response":
+                "Something went wrong while continuing the project."
             },
             status_code=500
         )
