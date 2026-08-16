@@ -1,16 +1,12 @@
-import io
-import json
-import re
-import uuid
-import zipfile
+import os
 from typing import TypedDict
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
-from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import InMemorySaver
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.graph import StateGraph, START, END
 
 
 app = FastAPI()
@@ -22,8 +18,9 @@ app = FastAPI()
 
 llm = ChatGoogleGenerativeAI(
     model="gemini-3.6-flash",
-    max_output_tokens=16000,
-    max_retries=2
+    google_api_key=os.getenv("GOOGLE_API_KEY"),
+    temperature=0.7,
+    max_output_tokens=5000
 )
 
 
@@ -31,501 +28,311 @@ llm = ChatGoogleGenerativeAI(
 # LANGGRAPH STATE
 # ============================================================
 
-class DevCrewState(TypedDict):
-    user_request: str
+class TravelState(TypedDict):
+    destination: str
+    days: str
+    budget: str
+    people: str
+    interests: str
+    hotel_preference: str
     plan: str
-    backend_files: list
-    frontend_files: list
-    all_files: list
-    current_index: int
+    activities: str
+    hotels: str
+    budget_check: str
     review: str
-    final_result: str
-    generated_files: list
+    final_plan: str
 
 
 # ============================================================
-# HELPERS
+# USER INPUT
 # ============================================================
 
-def extract_text(response):
-    content = response.content
-
-    if isinstance(content, str):
-        return content
-
-    if isinstance(content, list):
-        parts = []
-
-        for item in content:
-            if isinstance(item, dict):
-                if item.get("type") == "text":
-                    text = item.get("text", "")
-
-                    if text:
-                        parts.append(text)
-
-            elif isinstance(item, str):
-                parts.append(item)
-
-        return "\n".join(parts)
-
-    return str(content)
-
-
-def clean_code(code):
-    code = code.strip()
-
-    if code.startswith("```"):
-        code = re.sub(
-            r"^```[a-zA-Z0-9_+-]*\s*",
-            "",
-            code
-        )
-
-        code = re.sub(
-            r"\s*```$",
-            "",
-            code
-        )
-
-    return code.strip()
-
-
-def parse_json_response(text):
-
-    text = text.strip()
-
-    if text.startswith("```"):
-        text = re.sub(
-            r"^```(?:json)?\s*",
-            "",
-            text
-        )
-
-        text = re.sub(
-            r"\s*```$",
-            "",
-            text
-        )
-
-    start = text.find("{")
-    end = text.rfind("}")
-
-    if start == -1 or end == -1:
-        raise ValueError(
-            "The model did not return valid JSON."
-        )
-
-    return json.loads(
-        text[start:end + 1]
-    )
-
-
-def normalize_file_list(items):
-
-    result = []
-
-    if not isinstance(items, list):
-        return result
-
-    for item in items:
-
-        if not isinstance(item, dict):
-            continue
-
-        filename = str(
-            item.get("filename", "")
-        ).strip()
-
-        purpose = str(
-            item.get("purpose", "")
-        ).strip()
-
-        if filename:
-            result.append({
-                "filename": filename,
-                "purpose": purpose
-            })
-
-    return result
+class TravelRequest(BaseModel):
+    destination: str
+    days: str
+    budget: str
+    people: str
+    interests: str
+    hotel_preference: str
 
 
 # ============================================================
-# PLANNER NODE
+# PLANNER
 # ============================================================
 
-def planner_node(state):
+def planner_node(state: TravelState):
 
     prompt = f"""
-You are the PLANNER in a software development team.
-
-USER REQUIREMENT:
-
-{state["user_request"]}
-
-Create a complete project plan and an exact file manifest.
-
-Return ONLY valid JSON.
-
-Do not use markdown.
-
-Use exactly this structure:
-
-{{
-    "plan": "detailed project plan",
-    "backend_files": [
-        {{
-            "filename": "app.py",
-            "purpose": "main application"
-        }}
-    ],
-    "frontend_files": [
-        {{
-            "filename": "templates/index.html",
-            "purpose": "main frontend page"
-        }}
-    ]
-}}
-
-Rules:
-
-- List every file that is actually needed.
-- Do not list unnecessary files.
-- Every listed file will later be generated completely.
-- Keep the project suitable for a student.
-- Make the backend and frontend compatible.
-- Include requirements.txt if required.
-- Do not include generated files such as __pycache__.
-- Use real relative filenames.
-- Do not use emojis.
-"""
-
-    response = llm.invoke(prompt)
-
-    text = extract_text(response)
-
-    try:
-
-        data = parse_json_response(text)
-
-        plan = str(
-            data.get("plan", "")
-        ).strip()
-
-        backend_files = normalize_file_list(
-            data.get("backend_files", [])
-        )
-
-        frontend_files = normalize_file_list(
-            data.get("frontend_files", [])
-        )
-
-        all_files = (
-            backend_files +
-            frontend_files
-        )
-
-        if not all_files:
-            raise ValueError(
-                "No files returned."
-            )
-
-        return {
-            "plan": plan,
-            "backend_files": backend_files,
-            "frontend_files": frontend_files,
-            "all_files": all_files,
-            "current_index": 0,
-            "review": "",
-            "final_result": "",
-            "generated_files": []
-        }
-
-    except Exception:
-
-        fallback = [
-            {
-                "filename": "app.py",
-                "purpose":
-                    "Main application"
-            }
-        ]
-
-        return {
-            "plan": text,
-            "backend_files": fallback,
-            "frontend_files": [],
-            "all_files": fallback,
-            "current_index": 0,
-            "review": "",
-            "final_result": "",
-            "generated_files": []
-        }
-
-
-# ============================================================
-# GENERATE ONE COMPLETE FILE
-# ============================================================
-
-def generate_file_node(state):
-
-    all_files = state["all_files"]
-
-    index = state["current_index"]
-
-    if index >= len(all_files):
-        return {}
-
-    file_info = all_files[index]
-
-    filename = file_info["filename"]
-
-    purpose = file_info["purpose"]
-
-    already_generated = [
-        item["filename"]
-        for item in state["generated_files"]
-    ]
-
-    previous_context = ""
-
-    for item in state["generated_files"][-3:]:
-
-        previous_context += (
-            "\n\nFILE: "
-            + item["filename"]
-            + "\n"
-            + item["content"]
-        )
-
-    prompt = f"""
-You are a professional software developer.
-
-USER REQUIREMENT:
-
-{state["user_request"]}
-
-
-PROJECT PLAN:
-
-{state["plan"]}
-
-
-CURRENT FILE:
-
-{filename}
-
-
-PURPOSE:
-
-{purpose}
-
-
-FILES ALREADY GENERATED:
-
-{json.dumps(already_generated)}
-
-
-PREVIOUS FILE CONTEXT:
-
-{previous_context}
-
-
-Generate ONLY the COMPLETE CONTENTS of:
-
-{filename}
-
-
-VERY IMPORTANT:
-
-- Give the complete file.
-- Do NOT give an explanation.
-- Do NOT use markdown code fences.
-- Do NOT use placeholders.
-- Do NOT use "...".
-- Do NOT use TODO.
-- Do NOT leave functions incomplete.
-- Do NOT say "same as above".
-- Include every required import.
-- Make the file compatible with the other files.
-- If this is Python, give the complete Python file.
-- If this is HTML, give the complete HTML.
-- If this is CSS, give the complete CSS.
-- If this is JavaScript, give the complete JavaScript.
-- If this is requirements.txt, give every required package.
-- Generate ONLY this one file.
-
-The response MUST contain the COMPLETE file.
-"""
-
-    response = llm.invoke(prompt)
-
-    content = clean_code(
-        extract_text(response)
-    )
-
-    generated_files = list(
-        state["generated_files"]
-    )
-
-    generated_files.append({
-        "filename": filename,
-        "content": content
-    })
-
-    return {
-        "generated_files":
-            generated_files,
-
-        "current_index":
-            index + 1
-    }
-
-
-# ============================================================
-# DECIDE NEXT NODE
-# ============================================================
-
-def after_file_generation(state):
-
-    if (
-        state["current_index"]
-        >= len(state["all_files"])
-    ):
-        return "reviewer"
-
-    return "generate_file"
-
-
-# ============================================================
-# REVIEWER NODE
-# ============================================================
-
-def reviewer_node(state):
-
-    project = ""
-
-    for item in state["generated_files"]:
-
-        project += (
-            "\n\nFILE: "
-            + item["filename"]
-            + "\n"
-            + item["content"]
-        )
-
-    prompt = f"""
-You are the REVIEWER in a software development team.
-
-USER REQUIREMENT:
-
-{state["user_request"]}
-
-
-PROJECT PLAN:
-
-{state["plan"]}
-
-
-GENERATED PROJECT:
-
-{project}
-
-
-Review the generated project.
-
-Check:
-
-1. Requirement satisfaction
-2. Python syntax
-3. Missing imports
-4. Missing functions
-5. Broken routes
-6. Frontend/backend compatibility
-7. Incorrect filenames
-8. Missing dependencies
-9. Incomplete code
-10. Placeholder code
-11. Whether the files work together
-
-Return:
-
-PROBLEMS FOUND
-
-CORRECTIONS REQUIRED
-
-OVERALL STATUS
-
-Do NOT regenerate the project.
-
-Do NOT repeat the complete source code.
-
-Do not use emojis.
+You are the Travel Planner in a travel planning system.
+
+Create a basic travel strategy from these details:
+
+Destination: {state["destination"]}
+Number of days: {state["days"]}
+Budget: {state["budget"]}
+Number of people: {state["people"]}
+Interests: {state["interests"]}
+Hotel preference: {state["hotel_preference"]}
+
+Identify:
+1. The type of trip
+2. Important planning considerations
+3. How the budget should be divided
+4. What kind of activities would suit the traveller
+
+Do not invent live prices or availability.
 """
 
     response = llm.invoke(prompt)
 
     return {
-        "review":
-            extract_text(response)
+        "plan": response.content
     }
 
 
 # ============================================================
-# FINALIZER NODE
+# ACTIVITY PLANNER
 # ============================================================
 
-def finalizer_node(state):
-
-    filenames = [
-        item["filename"]
-        for item in state["generated_files"]
-    ]
+def activities_node(state: TravelState):
 
     prompt = f"""
-You are the FINALIZER of a software development team.
+You are the Activity Planner.
 
-USER REQUIREMENT:
+Plan activities for this trip.
 
-{state["user_request"]}
+Destination: {state["destination"]}
+Days: {state["days"]}
+Number of people: {state["people"]}
+Interests: {state["interests"]}
+
+Create a realistic day-by-day activity plan.
+
+For every day include:
+- Places to visit
+- Activities
+- Suggested order
+- Approximate time needed
+- Useful travel tips
+
+Do not claim that prices or availability are live.
+"""
+
+    response = llm.invoke(prompt)
+
+    return {
+        "activities": response.content
+    }
 
 
-PROJECT PLAN:
+# ============================================================
+# HOTEL RECOMMENDER
+# ============================================================
 
+def hotels_node(state: TravelState):
+
+    prompt = f"""
+You are the Accommodation Planner.
+
+Destination: {state["destination"]}
+Number of days: {state["days"]}
+Budget: {state["budget"]}
+Number of people: {state["people"]}
+Hotel preference: {state["hotel_preference"]}
+
+Suggest suitable types of accommodation and, where you
+are confident, examples of hotels or accommodation areas.
+
+IMPORTANT:
+Do NOT claim that prices or rooms are currently available.
+
+Give the user these websites where they can check current
+prices and availability:
+
+Booking.com:
+https://www.booking.com/
+
+Agoda:
+https://www.agoda.com/
+
+Make it clear that the user should check the websites
+before booking.
+"""
+
+    response = llm.invoke(prompt)
+
+    return {
+        "hotels": response.content
+    }
+
+
+# ============================================================
+# BUDGET CHECKER
+# ============================================================
+
+def budget_node(state: TravelState):
+
+    prompt = f"""
+You are the Budget Checker.
+
+Review this proposed trip.
+
+Destination: {state["destination"]}
+Days: {state["days"]}
+Budget: {state["budget"]}
+People: {state["people"]}
+
+Initial planning:
 {state["plan"]}
 
+Activities:
+{state["activities"]}
 
-GENERATED FILES:
+Accommodation suggestions:
+{state["hotels"]}
 
-{json.dumps(filenames)}
+Determine whether the proposed trip appears realistic
+within the stated budget.
+
+Break the budget into categories such as:
+- Accommodation
+- Food
+- Local transport
+- Activities
+- Emergency/miscellaneous
+
+Do NOT pretend to know live prices.
+
+If exact prices are unavailable, clearly say that the user
+should verify current prices before booking.
+"""
+
+    response = llm.invoke(prompt)
+
+    return {
+        "budget_check": response.content
+    }
 
 
-REVIEW:
+# ============================================================
+# REVIEWER
+# ============================================================
 
+def reviewer_node(state: TravelState):
+
+    prompt = f"""
+You are the Travel Plan Reviewer.
+
+Review the following proposed trip:
+
+Destination:
+{state["destination"]}
+
+Plan:
+{state["plan"]}
+
+Activities:
+{state["activities"]}
+
+Hotels:
+{state["hotels"]}
+
+Budget Check:
+{state["budget_check"]}
+
+Find problems such as:
+- Too many activities in one day
+- Unrealistic travel schedule
+- Budget concerns
+- Missing rest time
+- Poor activity ordering
+- Accommodation issues
+
+Then give specific corrections.
+
+Do not generate the final itinerary yet.
+"""
+
+    response = llm.invoke(prompt)
+
+    return {
+        "review": response.content
+    }
+
+
+# ============================================================
+# FINALIZER
+# ============================================================
+
+def finalizer_node(state: TravelState):
+
+    prompt = f"""
+You are the Final Travel Planner.
+
+Create the final travel plan using all previous information.
+
+Destination:
+{state["destination"]}
+
+Days:
+{state["days"]}
+
+Budget:
+{state["budget"]}
+
+People:
+{state["people"]}
+
+Interests:
+{state["interests"]}
+
+Hotel preference:
+{state["hotel_preference"]}
+
+Initial Plan:
+{state["plan"]}
+
+Activities:
+{state["activities"]}
+
+Hotels:
+{state["hotels"]}
+
+Budget Check:
+{state["budget_check"]}
+
+Reviewer Feedback:
 {state["review"]}
 
+Create a clear final answer containing:
 
-Prepare the final handoff.
+1. Trip Overview
+2. Day-by-Day Itinerary
+3. Accommodation Suggestions
+4. Budget Guidance
+5. Travel Tips
+6. Hotel/Booking Websites
 
-Include:
+Use these websites:
 
-1. Final project structure
-2. What was generated
-3. How to install dependencies
-4. How to run the project
-5. Important corrections
-6. Any remaining issue
+Booking.com:
+https://www.booking.com/
 
-Do NOT regenerate source code.
+Agoda:
+https://www.agoda.com/
 
-Do not use emojis.
+IMPORTANT:
+Do not claim that hotel prices or availability are live.
+Tell the user to check the websites for current prices
+and availability.
+
+Make the final plan practical and easy to follow.
 """
 
     response = llm.invoke(prompt)
 
     return {
-        "final_result":
-            extract_text(response)
+        "final_plan": response.content
     }
 
 
@@ -533,9 +340,7 @@ Do not use emojis.
 # LANGGRAPH
 # ============================================================
 
-builder = StateGraph(
-    DevCrewState
-)
+builder = StateGraph(TravelState)
 
 builder.add_node(
     "planner",
@@ -543,8 +348,18 @@ builder.add_node(
 )
 
 builder.add_node(
-    "generate_file",
-    generate_file_node
+    "activities",
+    activities_node
+)
+
+builder.add_node(
+    "hotels",
+    hotels_node
+)
+
+builder.add_node(
+    "budget",
+    budget_node
 )
 
 builder.add_node(
@@ -557,6 +372,7 @@ builder.add_node(
     finalizer_node
 )
 
+
 builder.add_edge(
     START,
     "planner"
@@ -564,12 +380,22 @@ builder.add_edge(
 
 builder.add_edge(
     "planner",
-    "generate_file"
+    "activities"
 )
 
-builder.add_conditional_edges(
-    "generate_file",
-    after_file_generation
+builder.add_edge(
+    "activities",
+    "hotels"
+)
+
+builder.add_edge(
+    "hotels",
+    "budget"
+)
+
+builder.add_edge(
+    "budget",
+    "reviewer"
 )
 
 builder.add_edge(
@@ -583,22 +409,7 @@ builder.add_edge(
 )
 
 
-checkpointer = InMemorySaver()
-
-graph = builder.compile(
-    checkpointer=checkpointer,
-    interrupt_after=[
-        "generate_file",
-        "reviewer"
-    ]
-)
-
-
-# ============================================================
-# SESSION STORAGE
-# ============================================================
-
-sessions = {}
+graph = builder.compile()
 
 
 # ============================================================
@@ -606,14 +417,13 @@ sessions = {}
 # ============================================================
 
 HTML = """
-
 <!DOCTYPE html>
 
 <html>
 
 <head>
 
-<title>Dev Crew</title>
+<title>Travel Planner</title>
 
 <meta
     name="viewport"
@@ -629,18 +439,16 @@ HTML = """
 body {
     margin: 0;
     font-family: Arial, sans-serif;
-    background: #f5f7fb;
+    background: #f4f6f8;
 }
 
 .container {
-    max-width: 1000px;
+    max-width: 850px;
     margin: 30px auto;
     background: white;
+    padding: 30px;
     border-radius: 15px;
-    padding: 25px;
-    box-shadow:
-        0 5px 25px
-        rgba(0, 0, 0, 0.08);
+    box-shadow: 0 5px 25px rgba(0,0,0,0.08);
 }
 
 h1 {
@@ -654,98 +462,57 @@ h1 {
     margin-bottom: 25px;
 }
 
-textarea {
-    width: 100%;
-    min-height: 150px;
-    resize: vertical;
-    padding: 14px;
-    border: 1px solid #ccc;
-    border-radius: 10px;
-    font-family: Arial, sans-serif;
-    font-size: 16px;
+label {
+    display: block;
+    margin-top: 15px;
+    margin-bottom: 6px;
+    font-weight: bold;
 }
 
-button {
-    padding: 12px 20px;
-    border: none;
-    border-radius: 9px;
-    background: #111827;
-    color: white;
-    cursor: pointer;
+input,
+textarea,
+select {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #ccc;
+    border-radius: 8px;
     font-size: 15px;
 }
 
-button:hover {
-    opacity: 0.9;
+textarea {
+    min-height: 100px;
+    resize: vertical;
+}
+
+button {
+    display: block;
+    margin: 25px auto;
+    padding: 13px 25px;
+    border: none;
+    border-radius: 8px;
+    background: #111827;
+    color: white;
+    font-size: 16px;
+    cursor: pointer;
 }
 
 button:disabled {
     opacity: 0.6;
-    cursor: not-allowed;
 }
 
-.center-button {
-    display: block;
-    margin: 15px auto;
-}
-
-#stage {
+#loading {
     text-align: center;
-    font-weight: bold;
-    margin: 20px 0;
+    display: none;
+    margin: 20px;
 }
 
-#output {
-    margin-top: 15px;
-}
-
-.response-section {
-    margin-bottom: 25px;
-    padding: 20px;
-    border: 1px solid #ddd;
-    border-radius: 12px;
-    background: #fafafa;
-}
-
-.response-title {
-    font-size: 20px;
-    font-weight: bold;
-    margin-bottom: 8px;
-}
-
-.response-file {
-    color: #555;
-    font-size: 14px;
-    margin-bottom: 15px;
-}
-
-.response-content {
+#result {
     white-space: pre-wrap;
-    word-wrap: break-word;
-    overflow-wrap: anywhere;
-    overflow-x: auto;
-    line-height: 1.5;
-    font-family: Consolas, monospace;
-    font-size: 13px;
-    background: white;
-    padding: 15px;
-    border-radius: 8px;
-    border: 1px solid #e2e2e2;
-}
-
-.download-button {
-    margin-top: 15px;
-    background: #374151;
-}
-
-#continueButton {
-    display: none;
-    margin: 20px auto;
-}
-
-#downloadZipButton {
-    display: none;
-    margin: 10px auto 20px auto;
+    line-height: 1.6;
+    background: #fafafa;
+    padding: 20px;
+    border-radius: 10px;
+    border: 1px solid #ddd;
 }
 
 </style>
@@ -755,51 +522,92 @@ button:disabled {
 
 <body>
 
-
 <div class="container">
 
-<h1>Dev Crew</h1>
+<h1>Travel Planner</h1>
 
 <div class="subtitle">
-LangGraph Powered Development Team
+Plan your trip using a LangGraph-powered travel assistant
 </div>
 
 
+<label>Destination</label>
+
+<input
+    id="destination"
+    placeholder="Example: Goa"
+/>
+
+
+<label>Number of Days</label>
+
+<input
+    id="days"
+    type="number"
+    min="1"
+    placeholder="Example: 4"
+/>
+
+
+<label>Budget</label>
+
+<input
+    id="budget"
+    placeholder="Example: ₹20000"
+/>
+
+
+<label>Number of People</label>
+
+<input
+    id="people"
+    type="number"
+    min="1"
+    placeholder="Example: 2"
+/>
+
+
+<label>Interests</label>
+
 <textarea
-    id="request"
-    placeholder="Describe the application you want to build..."
+    id="interests"
+    placeholder="Example: Beaches, sightseeing, food, adventure"
 ></textarea>
 
 
-<button
-    id="startButton"
-    class="center-button"
-    onclick="startProject()"
->
-Start Project
-</button>
+<label>Hotel Preference</label>
 
+<select id="hotel_preference">
 
-<div id="stage"></div>
+<option value="Budget">
+Budget
+</option>
 
+<option value="Mid-range">
+Mid-range
+</option>
 
-<div id="output"></div>
+<option value="Luxury">
+Luxury
+</option>
 
-
-<button
-    id="continueButton"
-    onclick="continueProject()"
->
-Continue
-</button>
+</select>
 
 
 <button
-    id="downloadZipButton"
-    onclick="downloadZip()"
+    id="planButton"
+    onclick="planTrip()"
 >
-Download Complete Project ZIP
+Plan My Trip
 </button>
+
+
+<div id="loading">
+Creating your travel plan...
+</div>
+
+
+<div id="result"></div>
 
 
 </div>
@@ -807,335 +615,91 @@ Download Complete Project ZIP
 
 <script>
 
-let sessionId = null;
+async function planTrip() {
 
-
-function addResponse(data) {
-
-    const output =
+    const button =
         document.getElementById(
-            "output"
+            "planButton"
+        );
+
+    const loading =
+        document.getElementById(
+            "loading"
+        );
+
+    const result =
+        document.getElementById(
+            "result"
         );
 
 
-    const section =
-        document.createElement(
-            "div"
-        );
-
-    section.className =
-        "response-section";
-
-
-    const title =
-        document.createElement(
-            "div"
-        );
-
-    title.className =
-        "response-title";
-
-    title.textContent =
-        data.stage;
-
-    section.appendChild(title);
-
-
-    if (data.filename) {
-
-        const fileName =
-            document.createElement(
-                "div"
-            );
-
-        fileName.className =
-            "response-file";
-
-        fileName.textContent =
-            "File: " + data.filename;
-
-        section.appendChild(
-            fileName
-        );
-    }
-
-
-    const content =
-        document.createElement(
-            "div"
-        );
-
-    content.className =
-        "response-content";
-
-    content.textContent =
-        data.response;
-
-    section.appendChild(
-        content
-    );
-
-
-    if (
-        data.filename &&
-        data.response
-    ) {
-
-        const download =
-            document.createElement(
-                "button"
-            );
-
-        download.className =
-            "download-button";
-
-        download.textContent =
-            "Download " +
-            data.filename;
-
-
-        download.onclick =
-            function() {
-
-                const blob =
-                    new Blob(
-                        [data.response],
-                        {
-                            type:
-                            "text/plain;charset=utf-8"
-                        }
-                    );
-
-
-                const url =
-                    URL.createObjectURL(
-                        blob
-                    );
-
-
-                const a =
-                    document.createElement(
-                        "a"
-                    );
-
-
-                a.href = url;
-
-
-                a.download =
-                    data.filename
-                    .split("/")
-                    .pop();
-
-
-                document.body.appendChild(
-                    a
-                );
-
-
-                a.click();
-
-
-                a.remove();
-
-
-                URL.revokeObjectURL(
-                    url
-                );
-            };
-
-
-        section.appendChild(
-            download
-        );
-    }
-
-
-    output.appendChild(
-        section
-    );
-
-
-    window.scrollTo({
-        top:
-            document.body.scrollHeight,
-        behavior:
-            "smooth"
-    });
-
-
-    const continueButton =
+    const destination =
         document.getElementById(
-            "continueButton"
-        );
-
-
-    if (data.finished) {
-
-        continueButton.style.display =
-            "none";
-
-
-        document.getElementById(
-            "downloadZipButton"
-        ).style.display =
-            "block";
-
-
-        document.getElementById(
-            "startButton"
-        ).disabled = false;
-
-
-        document.getElementById(
-            "stage"
-        ).textContent =
-            "Project completed.";
-
-    } else {
-
-        continueButton.style.display =
-            "block";
-
-        continueButton.disabled =
-            false;
-
-        document.getElementById(
-            "stage"
-        ).textContent = "";
-    }
-}
-
-
-async function startProject() {
-
-    const request =
-        document.getElementById(
-            "request"
+            "destination"
         ).value.trim();
 
 
-    if (!request) {
+    const days =
+        document.getElementById(
+            "days"
+        ).value.trim();
+
+
+    const budget =
+        document.getElementById(
+            "budget"
+        ).value.trim();
+
+
+    const people =
+        document.getElementById(
+            "people"
+        ).value.trim();
+
+
+    const interests =
+        document.getElementById(
+            "interests"
+        ).value.trim();
+
+
+    const hotel_preference =
+        document.getElementById(
+            "hotel_preference"
+        ).value;
+
+
+    if (
+        !destination ||
+        !days ||
+        !budget ||
+        !people ||
+        !interests
+    ) {
 
         alert(
-            "Please enter a requirement."
+            "Please fill in all fields."
         );
 
         return;
     }
-
-
-    document.getElementById(
-        "startButton"
-    ).disabled = true;
-
-
-    document.getElementById(
-        "continueButton"
-    ).style.display =
-        "none";
-
-
-    document.getElementById(
-        "downloadZipButton"
-    ).style.display =
-        "none";
-
-
-    document.getElementById(
-        "output"
-    ).innerHTML = "";
-
-
-    document.getElementById(
-        "stage"
-    ).textContent =
-        "Creating project plan...";
-
-
-    try {
-
-        const response =
-            await fetch(
-                "/start",
-                {
-                    method:
-                        "POST",
-
-                    headers: {
-                        "Content-Type":
-                            "application/json"
-                    },
-
-                    body:
-                        JSON.stringify({
-                            request:
-                                request
-                        })
-                }
-            );
-
-
-        const data =
-            await response.json();
-
-
-        if (!response.ok) {
-
-            throw new Error(
-                data.response
-            );
-        }
-
-
-        sessionId =
-            data.session_id;
-
-
-        addResponse(data);
-
-    }
-
-    catch (error) {
-
-        document.getElementById(
-            "output"
-        ).textContent =
-            error.message;
-
-
-        document.getElementById(
-            "startButton"
-        ).disabled = false;
-    }
-}
-
-
-async function continueProject() {
-
-    const button =
-        document.getElementById(
-            "continueButton"
-        );
 
 
     button.disabled = true;
 
+    loading.style.display =
+        "block";
 
-    document.getElementById(
-        "stage"
-    ).textContent =
-        "Generating next file...";
+    result.innerHTML = "";
 
 
     try {
 
         const response =
             await fetch(
-                "/continue",
+                "/plan",
                 {
-                    method:
-                        "POST",
+                    method: "POST",
 
                     headers: {
                         "Content-Type":
@@ -1144,8 +708,12 @@ async function continueProject() {
 
                     body:
                         JSON.stringify({
-                            session_id:
-                                sessionId
+                            destination,
+                            days,
+                            budget,
+                            people,
+                            interests,
+                            hotel_preference
                         })
                 }
             );
@@ -1158,36 +726,29 @@ async function continueProject() {
         if (!response.ok) {
 
             throw new Error(
-                data.response
+                data.error ||
+                "Something went wrong."
             );
         }
 
 
-        addResponse(data);
+        result.textContent =
+            data.final_plan;
 
-    }
 
-    catch (error) {
+    } catch (error) {
 
-        document.getElementById(
-            "stage"
-        ).textContent =
+        result.textContent =
+            "Error: " +
             error.message;
 
+    } finally {
+
         button.disabled = false;
+
+        loading.style.display =
+            "none";
     }
-}
-
-
-function downloadZip() {
-
-    if (!sessionId) {
-        return;
-    }
-
-
-    window.location.href =
-        "/download/" + sessionId;
 }
 
 </script>
@@ -1195,7 +756,6 @@ function downloadZip() {
 </body>
 
 </html>
-
 """
 
 
@@ -1213,402 +773,98 @@ async def home():
 
 
 # ============================================================
-# START PROJECT
+# PLAN TRIP
 # ============================================================
 
-@app.post("/start")
-async def start_project(
-    request: Request
+@app.post("/plan")
+async def plan_trip(
+    request: TravelRequest
 ):
 
     try:
 
-        data =
-            await request.json()
-
-        user_request =
-            data.get(
-                "request",
-                ""
-            ).strip()
-
-
-        if not user_request:
-
-            return JSONResponse(
-                {
-                    "response":
-                        "Please enter a requirement."
-                },
-                status_code=400
-            )
-
-
-        thread_id =
-            str(uuid.uuid4())
-
-
-        config = {
-            "configurable": {
-                "thread_id":
-                    thread_id
-            }
-        }
-
-
         initial_state = {
 
-            "user_request":
-                user_request,
+            "destination":
+                request.destination,
+
+            "days":
+                request.days,
+
+            "budget":
+                request.budget,
+
+            "people":
+                request.people,
+
+            "interests":
+                request.interests,
+
+            "hotel_preference":
+                request.hotel_preference,
 
             "plan":
                 "",
 
-            "backend_files":
-                [],
+            "activities":
+                "",
 
-            "frontend_files":
-                [],
+            "hotels":
+                "",
 
-            "all_files":
-                [],
-
-            "current_index":
-                0,
+            "budget_check":
+                "",
 
             "review":
                 "",
 
-            "final_result":
-                "",
-
-            "generated_files":
-                []
+            "final_plan":
+                ""
         }
 
 
         result =
             graph.invoke(
-                initial_state,
-                config=config
+                initial_state
             )
 
 
-        sessions[
-            thread_id
-        ] = True
+        return {
+            "final_plan":
+                result["final_plan"]
+        }
 
 
-        return JSONResponse({
-
-            "session_id":
-                thread_id,
-
-            "stage":
-                "Planner",
-
-            "response":
-                result.get(
-                    "plan",
-                    ""
-                ),
-
-            "finished":
-                False
-        })
-
-
-    except Exception as exc:
+    except Exception as e:
 
         print(
-            "START ERROR:",
-            repr(exc)
+            "ERROR:",
+            repr(e)
         )
 
-
-        return JSONResponse(
-            {
-                "response":
-                    "Something went wrong: "
-                    + str(exc)
-            },
-            status_code=500
-        )
-
-
-# ============================================================
-# CONTINUE PROJECT
-# ============================================================
-
-@app.post("/continue")
-async def continue_project(
-    request: Request
-):
-
-    try:
-
-        data =
-            await request.json()
-
-
-        thread_id =
-            data.get(
-                "session_id"
-            )
-
-
-        if (
-            not thread_id
-            or thread_id not in sessions
-        ):
-
-            return JSONResponse(
-                {
-                    "response":
-                        "Session not found. Start again."
-                },
-                status_code=400
-            )
-
-
-        config = {
-            "configurable": {
-                "thread_id":
-                    thread_id
-            }
+        return {
+            "error":
+                str(e)
         }
 
 
-        result =
-            graph.invoke(
-                None,
-                config=config
-            )
-
-
-        generated_files =
-            result.get(
-                "generated_files",
-                []
-            )
-
-
-        all_files =
-            result.get(
-                "all_files",
-                []
-            )
-
-
-        current_index =
-            result.get(
-                "current_index",
-                0
-            )
-
-
-        # ----------------------------------------------------
-        # A file was just generated
-        # ----------------------------------------------------
-
-        if (
-            generated_files
-            and current_index <= len(all_files)
-            and current_index > 0
-        ):
-
-            last_file =
-                generated_files[-1]
-
-
-            if current_index <= len(
-                all_files
-            ):
-
-                return JSONResponse({
-
-                    "stage":
-                        "Developer",
-
-                    "filename":
-                        last_file[
-                            "filename"
-                        ],
-
-                    "response":
-                        last_file[
-                            "content"
-                        ],
-
-                    "finished":
-                        False
-                })
-
-
-        # ----------------------------------------------------
-        # Reviewer
-        # ----------------------------------------------------
-
-        if result.get("review"):
-
-            return JSONResponse({
-
-                "stage":
-                    "Reviewer",
-
-                "response":
-                    result["review"],
-
-                "finished":
-                    False
-            })
-
-
-        # ----------------------------------------------------
-        # Finalizer
-        # ----------------------------------------------------
-
-        if result.get(
-            "final_result"
-        ):
-
-            return JSONResponse({
-
-                "stage":
-                    "Finalizer",
-
-                "response":
-                    result[
-                        "final_result"
-                    ],
-
-                "finished":
-                    True
-            })
-
-
-        return JSONResponse({
-
-            "stage":
-                "Processing",
-
-            "response":
-                "Processing the project...",
-
-            "finished":
-                False
-        })
-
-
-    except Exception as exc:
-
-        print(
-            "CONTINUE ERROR:",
-            repr(exc)
-        )
-
-
-        return JSONResponse(
-            {
-                "response":
-                    "Something went wrong: "
-                    + str(exc)
-            },
-            status_code=500
-        )
-
-
 # ============================================================
-# DOWNLOAD COMPLETE PROJECT
+# RUN
 # ============================================================
 
-@app.get(
-    "/download/{session_id}"
-)
-async def download_project(
-    session_id: str
-):
+if __name__ == "__main__":
 
-    if session_id not in sessions:
+    import uvicorn
 
-        return JSONResponse(
-            {
-                "response":
-                    "Session not found."
-            },
-            status_code=404
+    port = int(
+        os.getenv(
+            "PORT",
+            8000
         )
+    )
 
-
-    config = {
-        "configurable": {
-            "thread_id":
-                session_id
-        }
-    }
-
-
-    state =
-        graph.get_state(
-            config
-        )
-
-
-    generated_files =
-        state.values.get(
-            "generated_files",
-            []
-        )
-
-
-    if not generated_files:
-
-        return JSONResponse(
-            {
-                "response":
-                    "No files generated."
-            },
-            status_code=404
-        )
-
-
-    memory_file =
-        io.BytesIO()
-
-
-    with zipfile.ZipFile(
-        memory_file,
-        "w",
-        zipfile.ZIP_DEFLATED
-    ) as zip_file:
-
-        for item in generated_files:
-
-            filename =
-                item["filename"].replace(
-                    "\\",
-                    "/"
-                )
-
-
-            zip_file.writestr(
-                filename,
-                item["content"]
-            )
-
-
-    memory_file.seek(0)
-
-
-    return StreamingResponse(
-
-        memory_file,
-
-        media_type=
-            "application/zip",
-
-        headers={
-            "Content-Disposition":
-                'attachment; filename="dev_crew_project.zip"'
-        }
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port
     )
