@@ -17,7 +17,7 @@ app = FastAPI()
 # ============================================================
 
 llm = ChatGoogleGenerativeAI(
-    model="gemini-3.6-flash",
+    model="gemini-2.5-flash",
     google_api_key=os.getenv("GOOGLE_API_KEY"),
     temperature=0.7,
     max_output_tokens=5000
@@ -57,15 +57,15 @@ class TravelRequest(BaseModel):
 
 
 # ============================================================
-# PLANNER
+# PLANNER NODE
 # ============================================================
 
 def planner_node(state: TravelState):
 
     prompt = f"""
-You are the Travel Planner in a travel planning system.
+You are the main Travel Planner.
 
-Create a basic travel strategy from these details:
+The user wants to plan a trip with these details:
 
 Destination: {state["destination"]}
 Number of days: {state["days"]}
@@ -74,13 +74,16 @@ Number of people: {state["people"]}
 Interests: {state["interests"]}
 Hotel preference: {state["hotel_preference"]}
 
+Create a basic travel strategy.
+
 Identify:
-1. The type of trip
+1. Type of trip
 2. Important planning considerations
 3. How the budget should be divided
-4. What kind of activities would suit the traveller
+4. Suitable activities
+5. Important things to consider while planning
 
-Do not invent live prices or availability.
+Do not claim that prices or hotel availability are live.
 """
 
     response = llm.invoke(prompt)
@@ -91,7 +94,7 @@ Do not invent live prices or availability.
 
 
 # ============================================================
-# ACTIVITY PLANNER
+# ACTIVITY PLANNER NODE
 # ============================================================
 
 def activities_node(state: TravelState):
@@ -102,7 +105,7 @@ You are the Activity Planner.
 Plan activities for this trip.
 
 Destination: {state["destination"]}
-Days: {state["days"]}
+Number of days: {state["days"]}
 Number of people: {state["people"]}
 Interests: {state["interests"]}
 
@@ -115,6 +118,9 @@ For every day include:
 - Approximate time needed
 - Useful travel tips
 
+Make the schedule realistic and avoid putting too many
+activities into one day.
+
 Do not claim that prices or availability are live.
 """
 
@@ -126,7 +132,7 @@ Do not claim that prices or availability are live.
 
 
 # ============================================================
-# HOTEL RECOMMENDER
+# HOTEL RECOMMENDER NODE
 # ============================================================
 
 def hotels_node(state: TravelState):
@@ -134,20 +140,22 @@ def hotels_node(state: TravelState):
     prompt = f"""
 You are the Accommodation Planner.
 
-Destination: {state["destination"]}
+Trip destination: {state["destination"]}
 Number of days: {state["days"]}
 Budget: {state["budget"]}
 Number of people: {state["people"]}
 Hotel preference: {state["hotel_preference"]}
 
-Suggest suitable types of accommodation and, where you
-are confident, examples of hotels or accommodation areas.
+Suggest suitable accommodation areas and hotel options
+that may suit the traveller.
 
-IMPORTANT:
-Do NOT claim that prices or rooms are currently available.
+Do NOT claim that hotel prices or rooms are currently
+available.
 
-Give the user these websites where they can check current
-prices and availability:
+Tell the user to verify current prices and availability
+before booking.
+
+Provide these booking websites:
 
 Booking.com:
 https://www.booking.com/
@@ -155,8 +163,8 @@ https://www.booking.com/
 Agoda:
 https://www.agoda.com/
 
-Make it clear that the user should check the websites
-before booking.
+Explain briefly that these websites can be used to check
+current prices and availability.
 """
 
     response = llm.invoke(prompt)
@@ -167,7 +175,7 @@ before booking.
 
 
 # ============================================================
-# BUDGET CHECKER
+# BUDGET CHECKER NODE
 # ============================================================
 
 def budget_node(state: TravelState):
@@ -175,12 +183,19 @@ def budget_node(state: TravelState):
     prompt = f"""
 You are the Budget Checker.
 
-Review this proposed trip.
+Review the proposed trip.
 
-Destination: {state["destination"]}
-Days: {state["days"]}
-Budget: {state["budget"]}
-People: {state["people"]}
+Destination:
+{state["destination"]}
+
+Number of days:
+{state["days"]}
+
+Budget:
+{state["budget"]}
+
+Number of people:
+{state["people"]}
 
 Initial planning:
 {state["plan"]}
@@ -188,23 +203,24 @@ Initial planning:
 Activities:
 {state["activities"]}
 
-Accommodation suggestions:
+Accommodation:
 {state["hotels"]}
 
-Determine whether the proposed trip appears realistic
-within the stated budget.
+Check whether the trip appears realistic within the
+user's stated budget.
 
-Break the budget into categories such as:
+Break the budget into categories:
+
 - Accommodation
 - Food
-- Local transport
+- Local transportation
 - Activities
-- Emergency/miscellaneous
+- Miscellaneous/emergency
 
-Do NOT pretend to know live prices.
+Do not pretend that you know live prices.
 
-If exact prices are unavailable, clearly say that the user
-should verify current prices before booking.
+If exact prices are uncertain, clearly tell the user
+to verify current prices.
 """
 
     response = llm.invoke(prompt)
@@ -215,7 +231,7 @@ should verify current prices before booking.
 
 
 # ============================================================
-# REVIEWER
+# REVIEWER NODE
 # ============================================================
 
 def reviewer_node(state: TravelState):
@@ -223,12 +239,12 @@ def reviewer_node(state: TravelState):
     prompt = f"""
 You are the Travel Plan Reviewer.
 
-Review the following proposed trip:
+Review the proposed travel plan.
 
 Destination:
 {state["destination"]}
 
-Plan:
+Initial Plan:
 {state["plan"]}
 
 Activities:
@@ -240,17 +256,19 @@ Hotels:
 Budget Check:
 {state["budget_check"]}
 
-Find problems such as:
+Look for problems such as:
+
 - Too many activities in one day
-- Unrealistic travel schedule
+- Unrealistic schedule
 - Budget concerns
 - Missing rest time
-- Poor activity ordering
-- Accommodation issues
+- Poor ordering of locations
+- Accommodation problems
+- Missing important travel considerations
 
-Then give specific corrections.
+Give clear corrections that the final planner should make.
 
-Do not generate the final itinerary yet.
+Do not create the final itinerary yet.
 """
 
     response = llm.invoke(prompt)
@@ -261,7 +279,7 @@ Do not generate the final itinerary yet.
 
 
 # ============================================================
-# FINALIZER
+# FINALIZER NODE
 # ============================================================
 
 def finalizer_node(state: TravelState):
@@ -269,7 +287,8 @@ def finalizer_node(state: TravelState):
     prompt = f"""
 You are the Final Travel Planner.
 
-Create the final travel plan using all previous information.
+Create the final travel plan using all information produced
+by the previous agents.
 
 Destination:
 {state["destination"]}
@@ -286,7 +305,7 @@ People:
 Interests:
 {state["interests"]}
 
-Hotel preference:
+Hotel Preference:
 {state["hotel_preference"]}
 
 Initial Plan:
@@ -304,16 +323,16 @@ Budget Check:
 Reviewer Feedback:
 {state["review"]}
 
-Create a clear final answer containing:
+Create a clear final answer with these sections:
 
 1. Trip Overview
 2. Day-by-Day Itinerary
 3. Accommodation Suggestions
 4. Budget Guidance
 5. Travel Tips
-6. Hotel/Booking Websites
+6. Booking Websites
 
-Use these websites:
+Include these websites:
 
 Booking.com:
 https://www.booking.com/
@@ -322,11 +341,13 @@ Agoda:
 https://www.agoda.com/
 
 IMPORTANT:
-Do not claim that hotel prices or availability are live.
-Tell the user to check the websites for current prices
-and availability.
 
-Make the final plan practical and easy to follow.
+Do not claim hotel prices or availability are live.
+
+Tell the user to check the booking websites for current
+prices and availability before booking.
+
+Make the final plan practical, organized and easy to follow.
 """
 
     response = llm.invoke(prompt)
@@ -337,76 +358,26 @@ Make the final plan practical and easy to follow.
 
 
 # ============================================================
-# LANGGRAPH
+# LANGGRAPH WORKFLOW
 # ============================================================
 
 builder = StateGraph(TravelState)
 
-builder.add_node(
-    "planner",
-    planner_node
-)
-
-builder.add_node(
-    "activities",
-    activities_node
-)
-
-builder.add_node(
-    "hotels",
-    hotels_node
-)
-
-builder.add_node(
-    "budget",
-    budget_node
-)
-
-builder.add_node(
-    "reviewer",
-    reviewer_node
-)
-
-builder.add_node(
-    "finalizer",
-    finalizer_node
-)
+builder.add_node("planner", planner_node)
+builder.add_node("activities", activities_node)
+builder.add_node("hotels", hotels_node)
+builder.add_node("budget", budget_node)
+builder.add_node("reviewer", reviewer_node)
+builder.add_node("finalizer", finalizer_node)
 
 
-builder.add_edge(
-    START,
-    "planner"
-)
-
-builder.add_edge(
-    "planner",
-    "activities"
-)
-
-builder.add_edge(
-    "activities",
-    "hotels"
-)
-
-builder.add_edge(
-    "hotels",
-    "budget"
-)
-
-builder.add_edge(
-    "budget",
-    "reviewer"
-)
-
-builder.add_edge(
-    "reviewer",
-    "finalizer"
-)
-
-builder.add_edge(
-    "finalizer",
-    END
-)
+builder.add_edge(START, "planner")
+builder.add_edge("planner", "activities")
+builder.add_edge("activities", "hotels")
+builder.add_edge("hotels", "budget")
+builder.add_edge("budget", "reviewer")
+builder.add_edge("reviewer", "finalizer")
+builder.add_edge("finalizer", END)
 
 
 graph = builder.compile()
@@ -513,6 +484,7 @@ button:disabled {
     padding: 20px;
     border-radius: 10px;
     border: 1px solid #ddd;
+    margin-top: 20px;
 }
 
 </style>
@@ -527,7 +499,7 @@ button:disabled {
 <h1>Travel Planner</h1>
 
 <div class="subtitle">
-Plan your trip using a LangGraph-powered travel assistant
+LangGraph Powered Travel Planning Agent
 </div>
 
 
@@ -618,55 +590,32 @@ Creating your travel plan...
 async function planTrip() {
 
     const button =
-        document.getElementById(
-            "planButton"
-        );
+        document.getElementById("planButton");
 
     const loading =
-        document.getElementById(
-            "loading"
-        );
+        document.getElementById("loading");
 
     const result =
-        document.getElementById(
-            "result"
-        );
+        document.getElementById("result");
 
 
     const destination =
-        document.getElementById(
-            "destination"
-        ).value.trim();
-
+        document.getElementById("destination").value.trim();
 
     const days =
-        document.getElementById(
-            "days"
-        ).value.trim();
-
+        document.getElementById("days").value.trim();
 
     const budget =
-        document.getElementById(
-            "budget"
-        ).value.trim();
-
+        document.getElementById("budget").value.trim();
 
     const people =
-        document.getElementById(
-            "people"
-        ).value.trim();
-
+        document.getElementById("people").value.trim();
 
     const interests =
-        document.getElementById(
-            "interests"
-        ).value.trim();
-
+        document.getElementById("interests").value.trim();
 
     const hotel_preference =
-        document.getElementById(
-            "hotel_preference"
-        ).value;
+        document.getElementById("hotel_preference").value;
 
 
     if (
@@ -677,9 +626,7 @@ async function planTrip() {
         !interests
     ) {
 
-        alert(
-            "Please fill in all fields."
-        );
+        alert("Please fill in all fields.");
 
         return;
     }
@@ -687,48 +634,50 @@ async function planTrip() {
 
     button.disabled = true;
 
-    loading.style.display =
-        "block";
+    loading.style.display = "block";
 
     result.innerHTML = "";
 
 
     try {
 
-        const response =
-            await fetch(
-                "/plan",
-                {
-                    method: "POST",
+        const response = await fetch(
+            "/plan",
+            {
+                method: "POST",
 
-                    headers: {
-                        "Content-Type":
-                            "application/json"
-                    },
+                headers: {
+                    "Content-Type": "application/json"
+                },
 
-                    body:
-                        JSON.stringify({
-                            destination,
-                            days,
-                            budget,
-                            people,
-                            interests,
-                            hotel_preference
-                        })
-                }
-            );
+                body: JSON.stringify({
+                    destination: destination,
+                    days: days,
+                    budget: budget,
+                    people: people,
+                    interests: interests,
+                    hotel_preference: hotel_preference
+                })
+            }
+        );
 
 
-        const data =
-            await response.json();
+        const data = await response.json();
 
 
         if (!response.ok) {
 
             throw new Error(
-                data.error ||
-                "Something went wrong."
+                data.error || "Something went wrong."
             );
+
+        }
+
+
+        if (data.error) {
+
+            throw new Error(data.error);
+
         }
 
 
@@ -739,16 +688,16 @@ async function planTrip() {
     } catch (error) {
 
         result.textContent =
-            "Error: " +
-            error.message;
+            "Error: " + error.message;
 
     } finally {
 
         button.disabled = false;
 
-        loading.style.display =
-            "none";
+        loading.style.display = "none";
+
     }
+
 }
 
 </script>
@@ -760,96 +709,59 @@ async function planTrip() {
 
 
 # ============================================================
-# HOME
+# HOME ROUTE
 # ============================================================
 
-@app.get(
-    "/",
-    response_class=HTMLResponse
-)
+@app.get("/", response_class=HTMLResponse)
 async def home():
 
     return HTML
 
 
 # ============================================================
-# PLAN TRIP
+# PLAN ROUTE
 # ============================================================
 
 @app.post("/plan")
-async def plan_trip(
-    request: TravelRequest
-):
+async def plan_trip(request: TravelRequest):
 
     try:
 
         initial_state = {
-
-            "destination":
-                request.destination,
-
-            "days":
-                request.days,
-
-            "budget":
-                request.budget,
-
-            "people":
-                request.people,
-
-            "interests":
-                request.interests,
-
-            "hotel_preference":
-                request.hotel_preference,
-
-            "plan":
-                "",
-
-            "activities":
-                "",
-
-            "hotels":
-                "",
-
-            "budget_check":
-                "",
-
-            "review":
-                "",
-
-            "final_plan":
-                ""
+            "destination": request.destination,
+            "days": request.days,
+            "budget": request.budget,
+            "people": request.people,
+            "interests": request.interests,
+            "hotel_preference": request.hotel_preference,
+            "plan": "",
+            "activities": "",
+            "hotels": "",
+            "budget_check": "",
+            "review": "",
+            "final_plan": ""
         }
 
 
-        result =
-            graph.invoke(
-                initial_state
-            )
+        result = graph.invoke(initial_state)
 
 
         return {
-            "final_plan":
-                result["final_plan"]
+            "final_plan": result["final_plan"]
         }
 
 
     except Exception as e:
 
-        print(
-            "ERROR:",
-            repr(e)
-        )
+        print("ERROR:", repr(e))
 
         return {
-            "error":
-                str(e)
+            "error": str(e)
         }
 
 
 # ============================================================
-# RUN
+# START SERVER
 # ============================================================
 
 if __name__ == "__main__":
@@ -857,10 +769,7 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(
-        os.getenv(
-            "PORT",
-            8000
-        )
+        os.getenv("PORT", "8000")
     )
 
     uvicorn.run(
