@@ -6,24 +6,19 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import InMemorySaver
-
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-
-# ============================================================
-# FASTAPI
-# ============================================================
 
 app = FastAPI()
 
 
 # ============================================================
-# GOOGLE GEMINI
+# GOOGLE MODEL
 # ============================================================
 
 llm = ChatGoogleGenerativeAI(
     model="gemini-3.5-flash",
-    max_tokens=3500,
+    max_tokens=8000,
     max_retries=2
 )
 
@@ -42,7 +37,7 @@ class DevCrewState(TypedDict):
 
 
 # ============================================================
-# EXTRACT TEXT
+# RESPONSE TEXT EXTRACTION
 # ============================================================
 
 def extract_text(response):
@@ -77,33 +72,38 @@ def extract_text(response):
 
 
 # ============================================================
-# PLANNER
+# PLANNER AGENT
 # ============================================================
 
 def planner_node(state: DevCrewState):
 
     prompt = f"""
-You are the PLANNER in a software development team called Dev Crew.
+You are the PLANNER of a software development team called Dev Crew.
 
-USER REQUIREMENT:
+The user has requested:
 
 {state["user_request"]}
 
-Analyze the requirement and create a practical project plan.
+Create a clear and practical development plan.
 
 Include:
 
 1. Requirement understanding
 2. Main features
-3. Recommended technologies
-4. Database requirements if needed
-5. Project structure
-6. Main implementation steps
-7. Important edge cases
+3. User roles if applicable
+4. Recommended technologies
+5. Database requirements if applicable
+6. Complete project folder structure
+7. Backend requirements
+8. Frontend requirements
+9. Important implementation steps
+10. Important edge cases
+11. Required dependencies
 
-Keep the response reasonably detailed but not excessively long.
+This is the planning stage, so do not generate the complete source
+code yet.
 
-Do NOT write source code.
+Keep the plan detailed enough for the developers to implement it.
 
 Do not use emojis or decorative symbols.
 """
@@ -116,48 +116,89 @@ Do not use emojis or decorative symbols.
 
 
 # ============================================================
-# BACKEND DEVELOPER
+# BACKEND DEVELOPER AGENT
 # ============================================================
 
 def backend_node(state: DevCrewState):
 
     prompt = f"""
-You are the BACKEND DEVELOPER in the Dev Crew software
-development team.
+You are the BACKEND DEVELOPER in a professional software
+development team called Dev Crew.
 
 USER REQUIREMENT:
-
 {state["user_request"]}
 
 PROJECT PLAN:
-
 {state["plan"]}
 
-Now develop the backend portion of the requested project.
+Your job is to implement the COMPLETE BACKEND of this project.
 
-IMPORTANT:
+VERY IMPORTANT:
 
-- Provide complete backend implementation.
-- Do not leave code unfinished.
-- Do not use placeholders.
-- Do not say "continue the code".
-- Do not say "implementation omitted".
-- Include important backend files.
-- Include database models and logic when required.
-- Make sure imports are correct.
-- Make sure the code works with the planned project structure.
-- Keep it practical for a student project.
+You MUST provide the FULL SOURCE CODE.
 
-Your response should contain:
+Do NOT provide only an explanation.
 
-1. Backend purpose
-2. Backend files
-3. Complete code for the backend files
+Do NOT provide pseudocode.
 
-Do NOT generate the frontend.
+Do NOT provide partial code.
+
+Do NOT use placeholders such as:
+
+...
+pass
+TODO
+"add your code here"
+"implement this"
+"rest of the code"
+"same as above"
+"code omitted"
+
+Every required backend file must be shown completely.
+
+For example, if the backend requires:
+
+app.py
+models.py
+routes.py
+database.py
+
+then provide the COMPLETE contents of every one of those files.
+
+For every file, clearly show its filename and then its complete
+code in a code block.
+
+Make sure:
+
+- All imports are included.
+- All functions are included.
+- All classes are included.
+- Database models are complete.
+- API routes are complete.
+- Authentication is complete if required.
+- Validation is complete if required.
+- Error handling is included where appropriate.
+- Files work together.
+- Imports between files match the folder structure.
+- The code is runnable.
+- Do not invent files that are unnecessary.
+- Include requirements.txt if backend dependencies are required.
+
+If the project can reasonably be implemented as one backend file,
+give the complete single file.
+
+Do not generate the frontend in this stage.
 
 Do not use emojis or decorative symbols.
+
+Your response MUST contain:
+
+1. Backend overview
+2. Backend project structure
+3. Complete backend source code for EVERY required file
+4. Backend dependencies
 """
+
 
     response = llm.invoke(prompt)
 
@@ -167,47 +208,97 @@ Do not use emojis or decorative symbols.
 
 
 # ============================================================
-# FRONTEND DEVELOPER
+# FRONTEND DEVELOPER AGENT
 # ============================================================
 
 def frontend_node(state: DevCrewState):
 
     prompt = f"""
-You are the FRONTEND DEVELOPER in the Dev Crew software
-development team.
+You are the FRONTEND DEVELOPER in a professional software
+development team called Dev Crew.
 
 USER REQUIREMENT:
-
 {state["user_request"]}
 
 PROJECT PLAN:
-
 {state["plan"]}
 
 BACKEND IMPLEMENTATION:
-
 {state["backend"]}
 
-Now develop the frontend portion of the project.
+Your job is to implement the COMPLETE FRONTEND of this project.
 
-IMPORTANT:
+VERY IMPORTANT:
 
-- Provide complete frontend implementation.
-- Do not leave code unfinished.
-- Do not use placeholders.
-- Make the frontend compatible with the backend.
-- Make sure routes and filenames match.
-- Include HTML, CSS, and JavaScript when required.
-- Do not rewrite the entire backend.
+You MUST provide the FULL SOURCE CODE.
 
-Your response should contain:
+Do NOT provide only an explanation.
 
-1. Frontend purpose
-2. Frontend files
-3. Complete frontend code
+Do NOT provide pseudocode.
+
+Do NOT provide partial code.
+
+Do NOT use placeholders such as:
+
+...
+pass
+TODO
+"add your code here"
+"implement this"
+"rest of the code"
+"same as above"
+"code omitted"
+
+Every required frontend file must be shown completely.
+
+For example, if the frontend requires:
+
+templates/base.html
+templates/index.html
+templates/login.html
+static/css/style.css
+static/js/script.js
+
+then provide the COMPLETE contents of every one of those files.
+
+For every file:
+
+1. Clearly show the filename.
+2. Give the COMPLETE code.
+3. Make sure the code is directly usable.
+
+Make sure:
+
+- HTML is complete.
+- CSS is complete.
+- JavaScript is complete if required.
+- Forms are complete.
+- Navigation is complete.
+- API calls match the backend.
+- URLs/routes match the backend.
+- Template names match the backend.
+- IDs and class names match the JavaScript and CSS.
+- No frontend functionality is left unfinished.
+- The UI is clean and usable.
+- The frontend actually works with the provided backend.
+
+If the project does not need JavaScript, do not invent unnecessary
+JavaScript.
+
+Do not rewrite the backend unless a frontend/backend connection
+requires a small correction. If such a correction is necessary,
+clearly mention it.
 
 Do not use emojis or decorative symbols.
+
+Your response MUST contain:
+
+1. Frontend overview
+2. Frontend project structure
+3. Complete frontend source code for EVERY required file
+4. Any frontend dependencies if required
 """
+
 
     response = llm.invoke(prompt)
 
@@ -217,55 +308,65 @@ Do not use emojis or decorative symbols.
 
 
 # ============================================================
-# REVIEWER
+# REVIEWER AGENT
 # ============================================================
 
 def reviewer_node(state: DevCrewState):
 
     prompt = f"""
-You are the REVIEWER in the Dev Crew software development team.
+You are the REVIEWER of the Dev Crew software development team.
 
 USER REQUIREMENT:
-
 {state["user_request"]}
 
 PROJECT PLAN:
-
 {state["plan"]}
 
-BACKEND:
-
+BACKEND IMPLEMENTATION:
 {state["backend"]}
 
-FRONTEND:
-
+FRONTEND IMPLEMENTATION:
 {state["frontend"]}
 
-Review the proposed project carefully.
+Review the complete project.
 
-Check:
+Check carefully:
 
-1. Requirement satisfaction
-2. Backend correctness
-3. Frontend correctness
-4. Database consistency
-5. Imports
-6. Routes
-7. File names
-8. Dependencies
-9. Obvious syntax problems
-10. Obvious logical problems
-11. Whether the project can realistically run
+1. Does the implementation satisfy the user requirement?
+2. Is the backend complete?
+3. Is the frontend complete?
+4. Do backend routes match frontend requests?
+5. Do frontend URLs match backend routes?
+6. Are imports correct?
+7. Are filenames correct?
+8. Are dependencies correct?
+9. Are database models and relationships correct?
+10. Are there obvious syntax errors?
+11. Are there obvious logical errors?
+12. Are there missing files?
+13. Are there missing functions?
+14. Are there placeholder sections?
+15. Can the project realistically run?
 
-Give a concise review using these headings:
+Use these headings:
 
 PROBLEMS FOUND
 
 CORRECTIONS REQUIRED
 
+BACKEND CHECK
+
+FRONTEND CHECK
+
 WHAT IS ALREADY CORRECT
 
-Do NOT rewrite the entire project.
+IMPORTANT:
+
+Do NOT regenerate the entire project.
+
+Do NOT repeat all source code.
+
+Focus on identifying problems and exactly what should be corrected.
 
 Do not use emojis or decorative symbols.
 """
@@ -278,7 +379,7 @@ Do not use emojis or decorative symbols.
 
 
 # ============================================================
-# FINALIZER
+# FINALIZER AGENT
 # ============================================================
 
 def finalizer_node(state: DevCrewState):
@@ -287,46 +388,41 @@ def finalizer_node(state: DevCrewState):
 You are the FINALIZER and LEAD DEVELOPER of Dev Crew.
 
 USER REQUIREMENT:
-
 {state["user_request"]}
 
 PROJECT PLAN:
-
 {state["plan"]}
 
 BACKEND:
-
 {state["backend"]}
 
 FRONTEND:
-
 {state["frontend"]}
 
 REVIEW:
-
 {state["review"]}
 
-Create the final project summary using the developer work
-and the review.
+Prepare the final project handoff.
 
-IMPORTANT:
+The Backend Developer and Frontend Developer already provided
+complete source code.
 
-Do NOT regenerate the entire project code.
-
-The backend and frontend code were already shown in the
-previous stages.
+Do NOT unnecessarily regenerate all source code.
 
 Instead provide:
 
 1. Final project structure
 2. Technologies used
-3. Corrections made after review
-4. How the components work together
-5. Installation steps
-6. How to run the project
-7. Important final notes
+3. Required dependencies
+4. Corrections that should be applied based on the review
+5. How the backend and frontend connect
+6. Installation steps
+7. How to run the project
+8. Important final notes
+9. Any remaining issue that the developer should know about
 
-Keep this response reasonably concise.
+If the reviewer found a serious problem, explain the exact
+correction needed.
 
 Do not use emojis or decorative symbols.
 """
@@ -339,10 +435,11 @@ Do not use emojis or decorative symbols.
 
 
 # ============================================================
-# BUILD LANGGRAPH
+# CREATE LANGGRAPH
 # ============================================================
 
 builder = StateGraph(DevCrewState)
+
 
 builder.add_node(
     "planner",
@@ -371,7 +468,7 @@ builder.add_node(
 
 
 # ============================================================
-# GRAPH FLOW
+# GRAPH CONNECTIONS
 # ============================================================
 
 builder.add_edge(
@@ -406,7 +503,7 @@ builder.add_edge(
 
 
 # ============================================================
-# CHECKPOINTER
+# CHECKPOINT
 # ============================================================
 
 checkpointer = InMemorySaver()
@@ -423,15 +520,11 @@ graph = builder.compile(
 )
 
 
-# ============================================================
-# SESSION STORAGE
-# ============================================================
-
 sessions = {}
 
 
 # ============================================================
-# WEBSITE
+# WEB PAGE
 # ============================================================
 
 HTML = """
@@ -443,8 +536,10 @@ HTML = """
 
     <title>Dev Crew</title>
 
-    <meta name="viewport"
-          content="width=device-width, initial-scale=1.0">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
 
     <style>
 
@@ -459,7 +554,7 @@ HTML = """
         }
 
         .container {
-            max-width: 900px;
+            max-width: 950px;
             margin: 30px auto;
             background: white;
             border-radius: 15px;
@@ -480,7 +575,7 @@ HTML = """
 
         textarea {
             width: 100%;
-            min-height: 140px;
+            min-height: 150px;
             resize: vertical;
             padding: 14px;
             border: 1px solid #ccc;
@@ -528,8 +623,8 @@ HTML = """
         }
 
         .response-section {
-            padding-bottom: 25px;
-            margin-bottom: 25px;
+            padding-bottom: 30px;
+            margin-bottom: 30px;
             border-bottom: 1px solid #ddd;
         }
 
@@ -541,12 +636,17 @@ HTML = """
         .response-title {
             font-size: 20px;
             font-weight: bold;
-            margin-bottom: 12px;
+            margin-bottom: 15px;
         }
 
         .response-content {
             white-space: pre-wrap;
             word-wrap: break-word;
+            overflow-wrap: anywhere;
+        }
+
+        .code-block {
+            overflow-x: auto;
         }
 
         #continueButton {
@@ -651,12 +751,15 @@ function addResponse(data) {
 
 
     const button =
-        document.getElementById("continueButton");
+        document.getElementById(
+            "continueButton"
+        );
 
 
     if (data.finished) {
 
-        button.style.display = "none";
+        button.style.display =
+            "none";
 
         document.getElementById(
             "startButton"
@@ -664,7 +767,8 @@ function addResponse(data) {
 
     } else {
 
-        button.style.display = "block";
+        button.style.display =
+            "block";
 
         button.disabled = false;
     }
@@ -698,7 +802,8 @@ async function startProject() {
 
     document.getElementById(
         "continueButton"
-    ).style.display = "none";
+    ).style.display =
+        "none";
 
 
     document.getElementById(
@@ -726,7 +831,8 @@ async function startProject() {
                     },
 
                     body: JSON.stringify({
-                        request: request
+                        request:
+                            request
                     })
                 }
             );
@@ -854,7 +960,7 @@ async function continueProject() {
 
 
 # ============================================================
-# HOME ROUTE
+# HOME
 # ============================================================
 
 @app.get(
@@ -867,20 +973,24 @@ async def home():
 
 
 # ============================================================
-# START PROJECT
+# START
 # ============================================================
 
 @app.post("/start")
-async def start_project(request: Request):
+async def start_project(
+    request: Request
+):
 
     try:
 
-        data = await request.json()
+        data =
+            await request.json()
 
-        user_request = data.get(
-            "request",
-            ""
-        ).strip()
+        user_request =
+            data.get(
+                "request",
+                ""
+            ).strip()
 
 
         if not user_request:
@@ -894,12 +1004,14 @@ async def start_project(request: Request):
             )
 
 
-        thread_id = str(uuid.uuid4())
+        thread_id =
+            str(uuid.uuid4())
 
 
         config = {
             "configurable": {
-                "thread_id": thread_id
+                "thread_id":
+                    thread_id
             }
         }
 
@@ -926,13 +1038,16 @@ async def start_project(request: Request):
         }
 
 
-        result = graph.invoke(
-            initial_state,
-            config=config
-        )
+        result =
+            graph.invoke(
+                initial_state,
+                config=config
+            )
 
 
-        sessions[thread_id] = True
+        sessions[
+            thread_id
+        ] = True
 
 
         return JSONResponse(
@@ -959,6 +1074,7 @@ async def start_project(request: Request):
             str(e)
         )
 
+
         return JSONResponse(
             {
                 "response":
@@ -969,19 +1085,24 @@ async def start_project(request: Request):
 
 
 # ============================================================
-# CONTINUE PROJECT
+# CONTINUE
 # ============================================================
 
 @app.post("/continue")
-async def continue_project(request: Request):
+async def continue_project(
+    request: Request
+):
 
     try:
 
-        data = await request.json()
+        data =
+            await request.json()
 
-        thread_id = data.get(
-            "session_id"
-        )
+
+        thread_id =
+            data.get(
+                "session_id"
+            )
 
 
         if (
@@ -1006,13 +1127,15 @@ async def continue_project(request: Request):
         }
 
 
-        result = graph.invoke(
-            None,
-            config=config
-        )
+        result =
+            graph.invoke(
+                None,
+                config=config
+            )
 
 
-        state = result
+        state =
+            result
 
 
         if state.get(
@@ -1025,7 +1148,9 @@ async def continue_project(request: Request):
                         "Finalizer",
 
                     "response":
-                        state["final_result"],
+                        state[
+                            "final_result"
+                        ],
 
                     "finished":
                         True
@@ -1043,7 +1168,9 @@ async def continue_project(request: Request):
                         "Reviewer",
 
                     "response":
-                        state["review"],
+                        state[
+                            "review"
+                        ],
 
                     "finished":
                         False
@@ -1061,7 +1188,9 @@ async def continue_project(request: Request):
                         "Developer - Frontend",
 
                     "response":
-                        state["frontend"],
+                        state[
+                            "frontend"
+                        ],
 
                     "finished":
                         False
@@ -1079,7 +1208,9 @@ async def continue_project(request: Request):
                         "Developer - Backend",
 
                     "response":
-                        state["backend"],
+                        state[
+                            "backend"
+                        ],
 
                     "finished":
                         False
@@ -1107,6 +1238,7 @@ async def continue_project(request: Request):
             "ERROR:",
             str(e)
         )
+
 
         return JSONResponse(
             {
