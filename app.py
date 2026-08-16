@@ -17,9 +17,8 @@ app = FastAPI()
 # ============================================================
 
 llm = ChatGoogleGenerativeAI(
-    model="gemini-3-flash-preview",
+    model="gemini-3.6-flash",
     google_api_key=os.getenv("GOOGLE_API_KEY"),
-    temperature=0.7,
     max_output_tokens=5000
 )
 
@@ -44,7 +43,7 @@ class TravelState(TypedDict):
 
 
 # ============================================================
-# USER INPUT
+# USER REQUEST
 # ============================================================
 
 class TravelRequest(BaseModel):
@@ -65,7 +64,7 @@ def planner_node(state: TravelState):
     prompt = f"""
 You are the main Travel Planner.
 
-The user wants to plan a trip with these details:
+Plan a trip using these details:
 
 Destination: {state["destination"]}
 Number of days: {state["days"]}
@@ -76,14 +75,15 @@ Hotel preference: {state["hotel_preference"]}
 
 Create a basic travel strategy.
 
-Identify:
+Include:
+
 1. Type of trip
 2. Important planning considerations
-3. How the budget should be divided
+3. Suggested budget distribution
 4. Suitable activities
-5. Important things to consider while planning
+5. Important travel considerations
 
-Do not claim that prices or hotel availability are live.
+Do not claim that hotel prices or availability are live.
 """
 
     response = llm.invoke(prompt)
@@ -111,15 +111,15 @@ Interests: {state["interests"]}
 
 Create a realistic day-by-day activity plan.
 
-For every day include:
+For each day include:
+
 - Places to visit
 - Activities
 - Suggested order
 - Approximate time needed
 - Useful travel tips
 
-Make the schedule realistic and avoid putting too many
-activities into one day.
+Do not put too many activities into one day.
 
 Do not claim that prices or availability are live.
 """
@@ -132,7 +132,7 @@ Do not claim that prices or availability are live.
 
 
 # ============================================================
-# HOTEL RECOMMENDER NODE
+# HOTEL NODE
 # ============================================================
 
 def hotels_node(state: TravelState):
@@ -140,30 +140,30 @@ def hotels_node(state: TravelState):
     prompt = f"""
 You are the Accommodation Planner.
 
-Trip destination: {state["destination"]}
+Destination: {state["destination"]}
 Number of days: {state["days"]}
 Budget: {state["budget"]}
 Number of people: {state["people"]}
 Hotel preference: {state["hotel_preference"]}
 
-Suggest suitable accommodation areas and hotel options
-that may suit the traveller.
+Suggest suitable accommodation areas and hotel options.
 
-Do NOT claim that hotel prices or rooms are currently
-available.
+IMPORTANT:
+
+Do NOT claim that prices or rooms are currently available.
 
 Tell the user to verify current prices and availability
 before booking.
 
-Provide these booking websites:
+Mention these booking websites:
 
-Booking.com:
+Booking.com
 https://www.booking.com/
 
-Agoda:
+Agoda
 https://www.agoda.com/
 
-Explain briefly that these websites can be used to check
+Explain that the user can visit these websites to check
 current prices and availability.
 """
 
@@ -175,7 +175,7 @@ current prices and availability.
 
 
 # ============================================================
-# BUDGET CHECKER NODE
+# BUDGET NODE
 # ============================================================
 
 def budget_node(state: TravelState):
@@ -183,7 +183,7 @@ def budget_node(state: TravelState):
     prompt = f"""
 You are the Budget Checker.
 
-Review the proposed trip.
+Review this proposed trip.
 
 Destination:
 {state["destination"]}
@@ -197,7 +197,7 @@ Budget:
 Number of people:
 {state["people"]}
 
-Initial planning:
+Initial Plan:
 {state["plan"]}
 
 Activities:
@@ -206,10 +206,10 @@ Activities:
 Accommodation:
 {state["hotels"]}
 
-Check whether the trip appears realistic within the
-user's stated budget.
+Check whether the trip appears realistic within the stated
+budget.
 
-Break the budget into categories:
+Divide the budget into:
 
 - Accommodation
 - Food
@@ -219,8 +219,8 @@ Break the budget into categories:
 
 Do not pretend that you know live prices.
 
-If exact prices are uncertain, clearly tell the user
-to verify current prices.
+If exact prices are uncertain, clearly tell the user to
+verify current prices.
 """
 
     response = llm.invoke(prompt)
@@ -239,7 +239,7 @@ def reviewer_node(state: TravelState):
     prompt = f"""
 You are the Travel Plan Reviewer.
 
-Review the proposed travel plan.
+Review the proposed trip.
 
 Destination:
 {state["destination"]}
@@ -256,17 +256,17 @@ Hotels:
 Budget Check:
 {state["budget_check"]}
 
-Look for problems such as:
+Look for:
 
 - Too many activities in one day
-- Unrealistic schedule
-- Budget concerns
+- Unrealistic schedules
+- Budget problems
 - Missing rest time
 - Poor ordering of locations
 - Accommodation problems
-- Missing important travel considerations
+- Missing travel considerations
 
-Give clear corrections that the final planner should make.
+Give clear corrections for the final planner.
 
 Do not create the final itinerary yet.
 """
@@ -323,32 +323,43 @@ Budget Check:
 Reviewer Feedback:
 {state["review"]}
 
-Create a clear final answer with these sections:
+Create the final answer with these sections:
 
-1. Trip Overview
-2. Day-by-Day Itinerary
-3. Accommodation Suggestions
-4. Budget Guidance
-5. Travel Tips
-6. Booking Websites
+1. TRIP OVERVIEW
 
-Include these websites:
+2. DAY-BY-DAY ITINERARY
 
-Booking.com:
+3. ACCOMMODATION SUGGESTIONS
+
+4. BUDGET GUIDANCE
+
+5. TRAVEL TIPS
+
+6. BOOKING WEBSITES
+
+Mention:
+
+Booking.com
 https://www.booking.com/
 
-Agoda:
+Agoda
 https://www.agoda.com/
 
 IMPORTANT:
 
-Do not claim hotel prices or availability are live.
+Do not claim that hotel prices or availability are live.
 
 Tell the user to check the booking websites for current
 prices and availability before booking.
 
-Make the final plan practical, organized and easy to follow.
+Make the final answer practical, organized and easy to follow.
+
+Return ONLY the travel plan as normal text.
+Do not return JSON.
+Do not return Python code.
+Do not return dictionaries.
 """
+
 
     response = llm.invoke(prompt)
 
@@ -358,7 +369,7 @@ Make the final plan practical, organized and easy to follow.
 
 
 # ============================================================
-# LANGGRAPH WORKFLOW
+# LANGGRAPH
 # ============================================================
 
 builder = StateGraph(TravelState)
@@ -370,7 +381,6 @@ builder.add_node("budget", budget_node)
 builder.add_node("reviewer", reviewer_node)
 builder.add_node("finalizer", finalizer_node)
 
-
 builder.add_edge(START, "planner")
 builder.add_edge("planner", "activities")
 builder.add_edge("activities", "hotels")
@@ -378,7 +388,6 @@ builder.add_edge("hotels", "budget")
 builder.add_edge("budget", "reviewer")
 builder.add_edge("reviewer", "finalizer")
 builder.add_edge("finalizer", END)
-
 
 graph = builder.compile()
 
@@ -525,7 +534,7 @@ LangGraph Powered Travel Planning Agent
 
 <input
     id="budget"
-    placeholder="Example: ₹20000"
+    placeholder="Example: 50000"
 />
 
 
@@ -535,7 +544,7 @@ LangGraph Powered Travel Planning Agent
     id="people"
     type="number"
     min="1"
-    placeholder="Example: 2"
+    placeholder="Example: 4"
 />
 
 
@@ -543,7 +552,7 @@ LangGraph Powered Travel Planning Agent
 
 <textarea
     id="interests"
-    placeholder="Example: Beaches, sightseeing, food, adventure"
+    placeholder="Example: Beaches, food, bike rides"
 ></textarea>
 
 
@@ -681,8 +690,23 @@ async function planTrip() {
         }
 
 
-        result.textContent =
-            data.final_plan;
+        if (
+            typeof data.final_plan === "string"
+        ) {
+
+            result.textContent =
+                data.final_plan;
+
+        } else {
+
+            result.textContent =
+                JSON.stringify(
+                    data.final_plan,
+                    null,
+                    2
+                );
+
+        }
 
 
     } catch (error) {
@@ -709,7 +733,7 @@ async function planTrip() {
 
 
 # ============================================================
-# HOME ROUTE
+# HOME
 # ============================================================
 
 @app.get("/", response_class=HTMLResponse)
@@ -719,7 +743,7 @@ async def home():
 
 
 # ============================================================
-# PLAN ROUTE
+# PLAN TRIP
 # ============================================================
 
 @app.post("/plan")
@@ -746,14 +770,33 @@ async def plan_trip(request: TravelRequest):
         result = graph.invoke(initial_state)
 
 
+        final_plan = result.get(
+            "final_plan",
+            ""
+        )
+
+
+        if not isinstance(
+            final_plan,
+            str
+        ):
+
+            final_plan = str(
+                final_plan
+            )
+
+
         return {
-            "final_plan": result["final_plan"]
+            "final_plan": final_plan
         }
 
 
     except Exception as e:
 
-        print("ERROR:", repr(e))
+        print(
+            "ERROR:",
+            repr(e)
+        )
 
         return {
             "error": str(e)
@@ -769,7 +812,10 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(
-        os.getenv("PORT", "8000")
+        os.getenv(
+            "PORT",
+            "8000"
+        )
     )
 
     uvicorn.run(
